@@ -78,7 +78,7 @@ unsigned int nextPowerOf2(unsigned int n)
 }
 
 // CUDA declarations
-std::vector<torch::Tensor> lfw_cuda_forward(
+torch::Tensor lfw_cuda_forward(
     torch::Tensor x,
     torch::Tensor f,
     torch::Tensor key,
@@ -124,7 +124,7 @@ std::vector<torch::Tensor> lfw_cuda_forward(
                ckpt_states.data<scalar_t>(),
                B, L, D, K); }));
 
-    return {ckpt_states};
+    return ckpt_states;
 }
 /*
 std::vector<torch::Tensor> lfw_cuda_backward(

@@ -3,7 +3,7 @@
 #include <vector>
 
 // CUDA declarations
-std::vector<torch::Tensor> lfw_cuda_forward(
+torch::Tensor lfw_cuda_forward(
     torch::Tensor x,
     torch::Tensor f,
     torch::Tensor key,
@@ -30,17 +30,23 @@ std::vector<torch::Tensor> lfw_cuda_backward(
 std::vector<at::Tensor> lfw_forward(
     torch::Tensor x,
     torch::Tensor f,
+    torch::Tensor query,
     torch::Tensor key,
     torch::Tensor f_key,
     torch::Tensor state
 ) {
   CHECK_INPUT(x);
   CHECK_INPUT(f);
+  CHECK_INPUT(query);
   CHECK_INPUT(key);
   CHECK_INPUT(f_key);
   CHECK_INPUT(state);
 
-  return lfw_cuda_forward(x, f, key, f_key, state);
+  auto ckpt_states = lfw_cuda_forward(x, f, key, f_key, state);
+  // Computing output outside the kernel is ~20% faster
+  auto outputs = torch::squeeze(torch::matmul(ckpt_states, torch::unsqueeze(query, -1)), -1);
+
+  return {outputs, ckpt_states};
 }
 /*
 std::vector<at::Tensor> lfw_backward(

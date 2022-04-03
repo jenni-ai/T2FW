@@ -11,6 +11,7 @@ setup(
     ],
     cmdclass={
         'build_ext': cpp_extension.BuildExtension.with_options(
-            no_python_abi_suffix=True)
+            no_python_abi_suffix=True
+        )
     }
 )

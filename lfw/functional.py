@@ -4,9 +4,13 @@ from typing import List, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+import os
 # Loads the library
-torch.ops.load_library("lfw.so")
+from pathlib import Path
+
+path = Path(os.path.dirname(os.path.abspath(__file__)))
+torch.ops.load_library(os.path.join(
+    path.parent, 'build', 'lib.linux-x86_64-3.8', 'lfw.so'))
 
 
 class LFWFunction(torch.autograd.Function):
@@ -30,21 +34,17 @@ class LFWFunction(torch.autograd.Function):
         assert f_key.dtype == value.dtype
         assert state.dtype == value.dtype
 
-        ckpt_states, *_ = torch.ops.lfw.forward(
-            value, forget, key, f_key, state
+        outputs, ckpt_states = torch.ops.lfw.forward(
+            value, forget, query, key, f_key, state
         )
 
-        with torch.no_grad():
-            # Computing this outside the kernel is ~20% faster
-            outputs = (ckpt_states @ query.unsqueeze(-1)).squeeze(-1)
-
-            ctx.save_for_backward(
-                forget,
-                query,
-                key,
-                f_key,
-                outputs,
-                state,
-                ckpt_states
-            )
+        ctx.save_for_backward(
+            forget,
+            query,
+            key,
+            f_key,
+            outputs,
+            state,
+            ckpt_states
+        )
         return outputs, ckpt_states[:, -1]
