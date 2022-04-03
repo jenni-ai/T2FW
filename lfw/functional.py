@@ -39,6 +39,7 @@ class LFWFunction(torch.autograd.Function):
         )
 
         ctx.save_for_backward(
+            value,
             forget,
             query,
             key,
@@ -48,3 +49,16 @@ class LFWFunction(torch.autograd.Function):
             ckpt_states
         )
         return outputs, ckpt_states[:, -1]
+
+    @staticmethod
+    def backward(ctx, grad_output, grad_state):
+        value, forget, query, key, f_key, outputs, state, ckpt_states = ctx.saved_tensors
+
+        assert grad_state.dtype == value.dtype
+        assert grad_output.dtype == value.dtype
+
+        res = torch.ops.lfw.backward(
+            grad_output, grad_state,
+            value, forget, query, key, f_key, outputs, state, ckpt_states
+        )
+        return tuple(res)
