@@ -1,16 +1,24 @@
 import math
+import os
+# Loads the library
+from pathlib import Path
 from typing import List, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import os
-# Loads the library
-from pathlib import Path
+from torch.utils.cpp_extension import load
 
-path = Path(os.path.dirname(os.path.abspath(__file__)))
-torch.ops.load_library(os.path.join(
-    path.parent, 'build', 'lib.linux-x86_64-3.8', 'lfw.so'))
+load(
+    name="lfw",
+    sources=[
+        os.path.join(os.path.dirname(__file__), "csrc", "lfw.cpp"),
+        os.path.join(os.path.dirname(__file__), "csrc", "lfw_kernel.cu"),
+    ],
+    extra_cflags=['-O3'],
+    is_python_module=False,
+    verbose=False
+)
 
 
 class LFWFunction(torch.autograd.Function):
