@@ -40,9 +40,9 @@ std::vector<at::Tensor> lfw_forward(
   CHECK_INPUT(f_key);
   CHECK_INPUT(state);
 
-  auto ckpt_states = lfw_cuda_forward(x, f, key, f_key, state);
+  const auto ckpt_states = lfw_cuda_forward(x, f, key, f_key, state);
   // Computing output outside the kernel is ~20% faster
-  auto outputs = torch::squeeze(torch::matmul(ckpt_states, torch::unsqueeze(query, -1)), -1);
+  const auto outputs = at::einsum("bldk,blk->bld", torch::TensorList({ckpt_states, query}));
 
   return {outputs, ckpt_states};
 }
@@ -79,21 +79,18 @@ std::vector<at::Tensor> lfw_backward(
     outputs
   );
   auto s_grad = res[0];
-  auto d_state = res[1];
+  const auto d_state = res[1];
 
-  // d_x [B, L, D, K] x [B, L, K, 1]
-  auto d_x = torch::squeeze(torch::matmul(s_grad, torch::unsqueeze(key, -1)), -1);
-  // d_query [B, L, 1, D] x [B, L, D, K]
-  auto d_query = torch::squeeze(torch::matmul(torch::unsqueeze(grad_output, -2), ckpt_states), -2);
-  // d_key [B, L, 1, D] x [B, L, D, K]
-  auto d_key = torch::squeeze(torch::matmul(torch::unsqueeze(value, -2), s_grad), -2);
+  const auto d_query = at::einsum("bld,bldk->blk", torch::TensorList({grad_output, ckpt_states}));
+  const auto d_x = at::einsum("bldk,blk->bld", torch::TensorList({s_grad, key}));
+  const auto d_key = at::einsum("bldk,bld->blk", torch::TensorList({s_grad, value}));
 
-  // Multiply by state
-  s_grad *= torch::cat(torch::TensorList({torch::unsqueeze(state, 1), torch::slice(ckpt_states, 1, 0, -1)}), 1);
-  // d_f [B, L, D, K] x [B, L, K, 1]
-  auto d_f = torch::squeeze(torch::matmul(s_grad, torch::unsqueeze(f_key, -1)), -1);
-  // d_f_key [B, L, D, K] x [B, L, K, 1]
-  auto d_f_key = torch::squeeze(torch::matmul(torch::unsqueeze(forget, -2), s_grad), -2);
+  // Multiply by state in place without using more memory
+  s_grad.index({torch::indexing::Slice(), 0}) *= state;
+  s_grad.index({torch::indexing::Slice(), torch::indexing::Slice(1)}) *= torch::slice(ckpt_states, 1, 0, -1);
+
+  const auto d_f = at::einsum("bldk,blk->bld", torch::TensorList({s_grad, f_key}));
+  const auto d_f_key = at::einsum("bldk,bld->blk", torch::TensorList({s_grad, forget}));
 
   return {d_x, d_f, d_query, d_key, d_f_key, d_state};
 }

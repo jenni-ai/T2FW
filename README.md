@@ -28,6 +28,12 @@ outputs, next_state = LFWFunction.apply(x, f, q, k, f_key, s)
 ```
 
 ## Unit Tests
+Check correctness of forward and backward pass against Torchscript implementation.
 ```
 python -m unittest tests/*.py
+```
+
+Benchmark running time against Torchscript implementation.
+```
+python -m tests.benchmark
 ```
