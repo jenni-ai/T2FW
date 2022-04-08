@@ -66,7 +66,7 @@ class LFWFunction(torch.autograd.Function):
         assert grad_output.dtype == value.dtype
 
         res = torch.ops.lfw.backward(
-            grad_output, grad_state,
+            grad_output.contiguous(), grad_state.contiguous(),
             value, forget, query, key, f_key, outputs, state, ckpt_states
         )
         return tuple(res)
