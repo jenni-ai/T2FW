@@ -9,12 +9,41 @@
 // Maximum threads per block
 const unsigned int MAX_TPB = 1024;
 // Maximum thread for 1st dim of block
-const unsigned int MAX_TILES = 8;
+// TODO: Should be dynamic
+const unsigned int MAX_TILES = 16;
 // const unsigned int MAX_TILES = 1024;
 // Maximum thread for 2nd dim of block
 const unsigned int MAX_D_TPB = 1024;
 
 #define ceil_div(a, b) (((a) + (b)-1) / (b))
+
+/**
+ * @brief Performs parallel sum of an array, leaving the result in index 0.
+ *
+ * @tparam scalar_t
+ * @param shared_tile
+ * @param id
+ * @param size
+ * @return __device__
+ */
+template <typename scalar_t>
+__device__ void parallel_sum(
+    scalar_t *shared_tile,
+    int id,
+    int size)
+{
+    int step_size = size / 2;
+    while (step_size > 0)
+    {
+        if (id < step_size)
+        {
+            // Reduce to the left side
+            shared_tile[id] += shared_tile[id + step_size];
+        }
+        __syncthreads();
+        step_size = step_size / 2;
+    }
+}
 
 template <typename scalar_t>
 __global__ void lfw_cuda_fwd_kernel(
@@ -80,13 +109,9 @@ __global__ void lfw_cuda_fwd_kernel(
         shared_tile[tile_id] = out;
         __syncthreads();
 
-        // Sum tile results (TODO: Use reduction algorithm)
-        out = 0;
-        for (int i = 0; i < num_tiles; i++)
-        {
-            out += shared_tile[i];
-        }
-        outputs[d_offset] = out;
+        // Sum tile results via parallel reduction
+        parallel_sum(shared_tile, tile_id, num_tiles);
+        outputs[d_offset] = shared_tile[0];
         __syncthreads();
 
         d_offset += d_size;
@@ -211,10 +236,11 @@ std::vector<torch::Tensor> lfw_cuda_forward(
         ceil_div(D, threads.y),
         B);
 
-    std::cout << num_tiles;
-    std::cout << "\n";
-    std::cout << tile_size;
-    std::cout << "\n";
+    // TODO:
+    // std::cout << num_tiles;
+    // std::cout << "\n";
+    // std::cout << tile_size;
+    // std::cout << "\n";
 
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(
         value.scalar_type(),
