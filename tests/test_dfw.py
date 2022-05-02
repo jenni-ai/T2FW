@@ -33,8 +33,8 @@ class Test(unittest.TestCase):
         dtype = torch.float
 
         for bsz, seqlen, dim in bld_gen():
-            # bsz, seqlen, dim, mdim = (1, 4, 4, 3)
             mdim = math.ceil(dim / 2)
+            # bsz, seqlen, dim, mdim = (1, 4, 1, 3)
             print('test_cpp', bsz, seqlen, dim, mdim)
 
             value = torch.randn(bsz, seqlen, dim, dtype=dtype, device='cuda')

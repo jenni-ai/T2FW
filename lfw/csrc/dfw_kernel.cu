@@ -9,7 +9,8 @@
 // Maximum threads per block
 const unsigned int MAX_TPB = 1024;
 // Maximum thread for 1st dim of block
-const unsigned int MAX_K_TPB = 1024;
+const unsigned int MAX_TILES = 8;
+// const unsigned int MAX_TILES = 1024;
 // Maximum thread for 2nd dim of block
 const unsigned int MAX_D_TPB = 1024;
 
@@ -23,66 +24,81 @@ __global__ void lfw_cuda_fwd_kernel(
     const scalar_t *state,
     scalar_t *final_state,
     scalar_t *outputs,
-    int b_size, int l_size, int d_size, int m_size)
+    int b_size,
+    int l_size,
+    int d_size,
+    int m_size,
+    int num_tiles,
+    int tile_size)
 {
-    // TODO: this is 0 for now
-    int m = 0; // blockDim.x * blockIdx.x + threadIdx.x;
+    int tile_id = blockDim.x * blockIdx.x + threadIdx.x;
     int d = blockDim.y * blockIdx.y + threadIdx.y;
     int b = blockDim.z * blockIdx.z + threadIdx.z;
 
-    // Holds state (for this specific dimension d)
     // Dynamic shared memory
     extern __shared__ char smem[];
-    scalar_t *shared_kv = reinterpret_cast<scalar_t *>(smem);
+    // Holds state (for this specific dimension d) (size = m_size)
+    scalar_t *cur_state = reinterpret_cast<scalar_t *>(smem);
+    // Holds tile results (size = num_tiles)
+    scalar_t *shared_tile = &cur_state[m_size];
 
-    // Check bounds
-    // TODO: Check m bounds
-    if (b < b_size && d < d_size)
+    // NOTE: Shouldn't be possible to be out of bounds for (b and d)
+
+    // b, d, m, m = 0
+    int state_offset = (b * d_size + d) * m_size;
+    // b, t, d, where t = 0
+    int d_offset = (b * l_size) * d_size + d;
+    // b, t, m, where t = 0, m = 0
+    int k_offset = (b * l_size) * m_size;
+
+    // We will be looping from m_start to m_end (which is the size of a tile)
+    int m_start = tile_id * tile_size;
+    int m_end = m_start + tile_size;
+
+    // Load current state
+    for (int m = m_start; m < m_end && m < m_size; m++)
     {
-        // b, d, m
-        int state_offset = (b * d_size + d) * m_size + m;
-        // b, t, d, where t = 0
-        int d_offset = (b * l_size) * d_size + d;
-        // b, t, m, where t = 0
-        int k_offset = (b * l_size) * m_size + m;
+        cur_state[m] = state[state_offset + m];
+    }
 
-        // scalar_t cur_s = state[state_offset];
-        // Load current state
-        for (int m_local = 0; m_local < m_size; m_local++)
+    // Go over each time step
+    for (int t = 0; t < l_size; t++)
+    {
+        auto curVal = value[d_offset];
+        // Compute next state
+        scalar_t out = 0;
+        for (int m = m_start; m < m_end && m < m_size; m++)
         {
-            shared_kv[m_local] = state[state_offset + m_local];
+            // Add new value to state
+            // TODO: Could load value in SM...
+            cur_state[m] += curVal * key[k_offset + m];
+            // Query the state
+            out += cur_state[m] * query[k_offset + m];
         }
 
-        // Go over each time step
-        for (int t = 0; t < l_size; t++)
+        // Each tile produce its partial results
+        shared_tile[tile_id] = out;
+        __syncthreads();
+
+        // Sum tile results (TODO: Use reduction algorithm)
+        out = 0;
+        for (int i = 0; i < num_tiles; i++)
         {
-            // Compute next state
-            scalar_t out = 0;
-            for (int m_local = 0; m_local < m_size; m_local++)
-            {
-                // Add new value to state
-                shared_kv[m_local] += value[d_offset] * key[k_offset + m_local];
-                // Query the state
-                out += shared_kv[m_local] * query[k_offset + m_local];
-            }
-
-            // atomicAdd(
-            //     &outputs[d_offset],
-            //     out);
-            // TODO: Won't parallelize
-            outputs[d_offset] = out;
-
-            d_offset += d_size;
-            k_offset += m_size;
+            out += shared_tile[i];
         }
+        outputs[d_offset] = out;
+        __syncthreads();
 
-        // Store final state
+        d_offset += d_size;
+        k_offset += m_size;
+    }
 
-        // Load current state
-        for (int m_local = 0; m_local < m_size; m_local++)
-        {
-            final_state[state_offset + m_local] = shared_kv[m_local];
-        }
+    // Store final state
+
+    // Load current state
+    for (int m = m_start; m < m_end && m < m_size; m++)
+    {
+        final_state[state_offset + m] = cur_state[m];
     }
 }
 
@@ -177,32 +193,41 @@ std::vector<torch::Tensor> lfw_cuda_forward(
             .dtype(value.dtype())
             .device(value.device()));
 
-    const auto numMThreads = 1;
-    // std::min(nextPowerOf2(K), MAX_K_TPB);
-    const auto numDThreads = 1;
+    // TODO: Maybe optimize for tiles = tile_size?
+    // TODO: Test with lower max k tpb
+    // TODO: Would be more efficient to pack rest of dimension into same SM
+    const auto num_tiles = std::min(nextPowerOf2(M), MAX_TILES);
+    // Elements to process per tile
+    const auto tile_size = ceil_div(M, num_tiles);
     // std::min(
     //     nextPowerOf2(D),
-    //     std::min(MAX_TPB / numMThreads, MAX_D_TPB));
+    //     std::min(MAX_TPB / num_tiles, MAX_D_TPB));
 
-    const dim3 threads(numMThreads, numDThreads, 1);
+    // Cannot use same sm for different dims
+    const dim3 threads(num_tiles, 1, 1);
     const dim3 blocks(
         1,
         // ceil_div(M, threads.x),
         ceil_div(D, threads.y),
         B);
 
+    std::cout << num_tiles;
+    std::cout << "\n";
+    std::cout << tile_size;
+    std::cout << "\n";
+
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(
         value.scalar_type(),
         "lfw_cuda_fwd_kernel",
         ([&]
-         { lfw_cuda_fwd_kernel<scalar_t><<<blocks, threads, M * sizeof(scalar_t)>>>(
+         { lfw_cuda_fwd_kernel<scalar_t><<<blocks, threads, (M + num_tiles) * sizeof(scalar_t)>>>(
                query.data<scalar_t>(),
                key.data<scalar_t>(),
                value.data<scalar_t>(),
                state.data<scalar_t>(),
                final_state.data<scalar_t>(),
                outputs.data<scalar_t>(),
-               B, L, D, M); }));
+               B, L, D, M, num_tiles, tile_size); }));
 
     return {outputs, final_state};
 }
@@ -234,7 +259,7 @@ std::vector<torch::Tensor> lfw_cuda_forward(
 //             .dtype(grad_state.dtype())
 //             .device(grad_state.device()));
 
-//     const auto numMThreads = std::min(nextPowerOf2(K), MAX_K_TPB);
+//     const auto numMThreads = std::min(nextPowerOf2(K), MAX_TILES);
 //     const auto numDThreads = std::min(
 //         nextPowerOf2(D),
 //         std::min(MAX_TPB / numMThreads, MAX_D_TPB));
