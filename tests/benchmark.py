@@ -3,6 +3,7 @@ import timeit
 
 import torch
 from lfw.functional import LFWFunction
+from lfw.functional_dfw import DFWFunction
 from lfw.torch import t2fw_torch
 from tabulate import tabulate
 
@@ -73,9 +74,10 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, percentiles=[0.2, 0.8]):
 
 def main():
     device = 'cuda'
-    providers = ('torch', 'cuda')
+    providers = ('torch', 'LFWFunction', 'DFWFunction')
     seqlens = tuple(range(8, 1024, 128))
-    backward = True
+    # TODO:
+    backward = False
 
     dtype = torch.half
     bsz = 32
@@ -87,14 +89,14 @@ def main():
         print('Benchmarking:', provider)
         results[provider] = []
         for seqlen in seqlens:
-            x = torch.randn(bsz, seqlen, dim, dtype=dtype, device='cuda')
-            f = torch.rand_like(x)
+            value = torch.randn(bsz, seqlen, dim, dtype=dtype, device='cuda')
+            f = torch.rand_like(value)
             q, k, f_key = (torch.randn(
                 bsz, seqlen, kdim, dtype=dtype, device='cuda') for _ in range(3))
             s = torch.zeros(bsz, dim, kdim, dtype=dtype, device='cuda')
-            grad = torch.randn_like(x)
+            grad = torch.randn_like(value)
 
-            input_vars = (x, f, q, k, f_key, s)
+            input_vars = (value, f, q, k, f_key, s)
             for v in input_vars:
                 v.requires_grad_()
 
@@ -109,9 +111,13 @@ def main():
             if provider == 'torch':
                 ms, *_ = do_bench(wrap_bwd(lambda: t2fw_torch(*input_vars)[0]))
 
-            if provider == 'cuda':
+            if provider == 'LFWFunction':
                 ms, *_ = do_bench(
                     wrap_bwd(lambda: LFWFunction.apply(*input_vars)[0]))
+
+            if provider == 'DFWFunction':
+                ms, *_ = do_bench(
+                    wrap_bwd(lambda: DFWFunction.apply(q, k, value, s)[0]))
 
             results[provider].append(ms)
 

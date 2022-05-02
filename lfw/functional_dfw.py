@@ -23,7 +23,7 @@ load(
 )
 
 
-class LFWFunction(torch.autograd.Function):
+class DFWFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx,
                 query: torch.Tensor,

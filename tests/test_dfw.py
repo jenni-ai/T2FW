@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from lfw.torch import t2dfw_torch
-from lfw.functional_dfw import LFWFunction
+from lfw.functional_dfw import DFWFunction
 
 
 def uniform_gate_init(tensor):
@@ -28,17 +28,20 @@ def bld_gen():
 class Test(unittest.TestCase):
     def test_cpp(self):
         torch.manual_seed(1)
-        dtype = torch.half
+        # Pure additive may cause numerical issue under fp16
+        # TODO:
+        dtype = torch.float
 
         for bsz, seqlen, dim in bld_gen():
-            bsz, seqlen, dim, mdim = (1, 4, 4, 3)
-            # mdim = math.ceil(dim / 2)
+            # bsz, seqlen, dim, mdim = (1, 4, 4, 3)
+            mdim = math.ceil(dim / 2)
             print('test_cpp', bsz, seqlen, dim, mdim)
 
             value = torch.randn(bsz, seqlen, dim, dtype=dtype, device='cuda')
-            query, key = (torch.randn(bsz, seqlen, mdim, dtype=dtype, device='cuda')
+            query, key = (torch.randn(bsz, seqlen, mdim, dtype=dtype, device='cuda').softmax(dim=-1)
                           for _ in range(2))
-            state = torch.randn(bsz, dim, mdim, dtype=dtype, device='cuda')
+            state = torch.randn(bsz, dim, mdim, dtype=dtype,
+                                device='cuda') * 0.1
 
             input_vars = (query, key, value, state)
             for var in input_vars:
@@ -55,7 +58,7 @@ class Test(unittest.TestCase):
             # for var in input_vars:
             #     var.grad = None
 
-            fast_output, fast_state = LFWFunction.apply(*input_vars)
+            fast_output, fast_state = DFWFunction.apply(*input_vars)
             # fast_output.backward(grad, retain_graph=True)
             # fast_state.backward(grad_state)
             # fast_grads = tuple(v.grad for v in input_vars)
