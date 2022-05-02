@@ -15,7 +15,9 @@ load(
         os.path.join(os.path.dirname(__file__), "csrc", "dfw.cpp"),
         os.path.join(os.path.dirname(__file__), "csrc", "dfw_kernel.cu"),
     ],
-    extra_cflags=['-O3'],
+    extra_cflags=['-O0'],
+    # TODO:
+    # extra_cflags=['-O3'],
     is_python_module=False,
     verbose=False
 )

@@ -23,14 +23,14 @@ std::vector<torch::Tensor> lfw_cuda_forward(
 #define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
 
 std::vector<at::Tensor> lfw_forward(
-    torch::Tensor value,
     torch::Tensor query,
     torch::Tensor key,
+    torch::Tensor value,
     torch::Tensor state
 ) {
-  CHECK_INPUT(value);
   CHECK_INPUT(query);
   CHECK_INPUT(key);
+  CHECK_INPUT(value);
   CHECK_INPUT(state);
 
   return lfw_cuda_forward(query, key, value, state);

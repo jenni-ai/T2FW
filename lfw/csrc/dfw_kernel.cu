@@ -25,28 +25,26 @@ __global__ void lfw_cuda_fwd_kernel(
     scalar_t *outputs,
     int b_size, int l_size, int d_size, int m_size)
 {
-    // TODO: Rename to m
     // TODO: this is 0 for now
-    int k = blockDim.x * blockIdx.x + threadIdx.x;
+    int m = 0; // blockDim.x * blockIdx.x + threadIdx.x;
     int d = blockDim.y * blockIdx.y + threadIdx.y;
     int b = blockDim.z * blockIdx.z + threadIdx.z;
 
     // Holds state (for this specific dimension d)
-    // Size is m_size
-    // extern __shared__ scalar_t shared_kv[];
-    // TODO: Need dynamic sm size
-    __shared__ scalar_t shared_kv[32];
+    // Dynamic shared memory
+    extern __shared__ char smem[];
+    scalar_t *shared_kv = reinterpret_cast<scalar_t *>(smem);
 
     // Check bounds
     // TODO: Check m bounds
     if (b < b_size && d < d_size)
     {
-        // b, d, k
-        int state_offset = (b * d_size + d) * m_size + k;
+        // b, d, m
+        int state_offset = (b * d_size + d) * m_size + m;
         // b, t, d, where t = 0
         int d_offset = (b * l_size) * d_size + d;
-        // b, t, k, where t = 0
-        int k_offset = (b * l_size) * m_size + k;
+        // b, t, m, where t = 0
+        int k_offset = (b * l_size) * m_size + m;
 
         // scalar_t cur_s = state[state_offset];
         // Load current state
@@ -54,9 +52,6 @@ __global__ void lfw_cuda_fwd_kernel(
         {
             shared_kv[m_local] = state[state_offset + m_local];
         }
-
-        // b, l, d, k
-        // state_offset = ((b * l_size) * d_size + d) * m_size + k;
 
         // Go over each time step
         for (int t = 0; t < l_size; t++)
@@ -77,7 +72,6 @@ __global__ void lfw_cuda_fwd_kernel(
             // TODO: Won't parallelize
             outputs[d_offset] = out;
 
-            state_offset += d_size * m_size;
             d_offset += d_size;
             k_offset += m_size;
         }
@@ -168,11 +162,11 @@ std::vector<torch::Tensor> lfw_cuda_forward(
     // Dimension
     const auto D = state.size(1);
     // Expansion dimension
-    const auto K = state.size(2);
+    const auto M = state.size(2);
 
     // TODO: to save memory could we write back into the same state?
     auto final_state = torch::empty(
-        {B, D, K},
+        {B, D, M},
         torch::TensorOptions()
             .dtype(value.dtype())
             .device(value.device()));
@@ -183,31 +177,32 @@ std::vector<torch::Tensor> lfw_cuda_forward(
             .dtype(value.dtype())
             .device(value.device()));
 
-    const auto numKThreads = 1;
+    const auto numMThreads = 1;
     // std::min(nextPowerOf2(K), MAX_K_TPB);
-    const auto numDThreads = std::min(
-        nextPowerOf2(D),
-        std::min(MAX_TPB / numKThreads, MAX_D_TPB));
+    const auto numDThreads = 1;
+    // std::min(
+    //     nextPowerOf2(D),
+    //     std::min(MAX_TPB / numMThreads, MAX_D_TPB));
 
-    const dim3 threads(numKThreads, numDThreads, 1);
+    const dim3 threads(numMThreads, numDThreads, 1);
     const dim3 blocks(
-        ceil_div(K, threads.x),
+        1,
+        // ceil_div(M, threads.x),
         ceil_div(D, threads.y),
         B);
 
-    // dyn sm , K * sizeof(scalar_t)
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(
         value.scalar_type(),
         "lfw_cuda_fwd_kernel",
         ([&]
-         { lfw_cuda_fwd_kernel<scalar_t><<<blocks, threads>>>(
+         { lfw_cuda_fwd_kernel<scalar_t><<<blocks, threads, M * sizeof(scalar_t)>>>(
                query.data<scalar_t>(),
                key.data<scalar_t>(),
                value.data<scalar_t>(),
                state.data<scalar_t>(),
                final_state.data<scalar_t>(),
                outputs.data<scalar_t>(),
-               B, L, D, K); }));
+               B, L, D, M); }));
 
     return {outputs, final_state};
 }
@@ -239,12 +234,12 @@ std::vector<torch::Tensor> lfw_cuda_forward(
 //             .dtype(grad_state.dtype())
 //             .device(grad_state.device()));
 
-//     const auto numKThreads = std::min(nextPowerOf2(K), MAX_K_TPB);
+//     const auto numMThreads = std::min(nextPowerOf2(K), MAX_K_TPB);
 //     const auto numDThreads = std::min(
 //         nextPowerOf2(D),
-//         std::min(MAX_TPB / numKThreads, MAX_D_TPB));
+//         std::min(MAX_TPB / numMThreads, MAX_D_TPB));
 
-//     const dim3 threads(numKThreads, numDThreads, 1);
+//     const dim3 threads(numMThreads, numDThreads, 1);
 //     const dim3 blocks(
 //         ceil_div(K, threads.x),
 //         ceil_div(D, threads.y),

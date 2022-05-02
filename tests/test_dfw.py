@@ -31,14 +31,14 @@ class Test(unittest.TestCase):
         dtype = torch.half
 
         for bsz, seqlen, dim in bld_gen():
-            # bsz, seqlen, dim = (1, 256, 32)
-            kdim = math.ceil(dim / 2)
-            print('test_cpp', bsz, seqlen, dim, kdim)
+            bsz, seqlen, dim, mdim = (1, 4, 4, 3)
+            # mdim = math.ceil(dim / 2)
+            print('test_cpp', bsz, seqlen, dim, mdim)
 
             value = torch.randn(bsz, seqlen, dim, dtype=dtype, device='cuda')
-            query, key = (torch.randn(bsz, seqlen, kdim, dtype=dtype, device='cuda')
+            query, key = (torch.randn(bsz, seqlen, mdim, dtype=dtype, device='cuda')
                           for _ in range(2))
-            state = torch.randn(bsz, dim, kdim, dtype=dtype, device='cuda')
+            state = torch.randn(bsz, dim, mdim, dtype=dtype, device='cuda')
 
             input_vars = (query, key, value, state)
             for var in input_vars:
