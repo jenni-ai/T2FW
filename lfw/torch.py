@@ -29,3 +29,29 @@ def t2fw_torch(
     outputs = torch.stack(outputs, dim=1)
 
     return outputs, state
+
+
+@torch.jit.script
+def t2dfw_torch(
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        state: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """ Equivalent Torchscript implementation for reference """
+
+    outputs = torch.jit.annotate(List[torch.Tensor], [])
+
+    for t in range(value.size(1)):
+        # old = state @ key[:, t].unsqueeze(-1)
+        new = value[:, t].unsqueeze(-1)
+        # [B, D, K]
+        # state = state + (new - old) @ key[:, t].unsqueeze(-2)
+
+        # Additive rule
+        state = state + new @ key[:, t].unsqueeze(-2)
+
+        out = (state @ query[:, t].unsqueeze(-1)).squeeze(-1)
+        outputs.append(out)
+    outputs = torch.stack(outputs, dim=1)
+
+    return outputs, state
