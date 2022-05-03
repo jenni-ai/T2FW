@@ -43,7 +43,7 @@ class Test(unittest.TestCase):
             query, key = (torch.randn(bsz, seqlen, mdim, dtype=dtype, device='cuda').softmax(dim=-1)
                           for _ in range(2))
             state = torch.randn(bsz, dim, mdim, dtype=dtype,
-                                device='cuda') * 0.1
+                                device='cuda')
 
             input_vars = (query, key, value, state)
             for var in input_vars:
@@ -61,14 +61,14 @@ class Test(unittest.TestCase):
                 var.grad = None
 
             fast_output, fast_state = DFWFunction.apply(*input_vars)
-            # fast_output.backward(grad, retain_graph=True)
-            # fast_state.backward(grad_state)
-            # fast_grads = tuple(v.grad for v in input_vars)
-            with torch.no_grad():
-                fast_grads = tuple(t2dfw_torch_bw(
-                    grad, grad_state,
-                    query, key, value, state, fast_state
-                ))
+            fast_output.backward(grad, retain_graph=True)
+            fast_state.backward(grad_state)
+            fast_grads = tuple(v.grad for v in input_vars)
+            # with torch.no_grad():
+            #     fast_grads = tuple(t2dfw_torch_bw(
+            #         grad, grad_state,
+            #         query, key, value, state, fast_state
+            #     ))
 
             try:
                 assert torch.allclose(ref_output, fast_output, atol=1e-2, rtol=1e-1), (

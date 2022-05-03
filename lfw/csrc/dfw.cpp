@@ -16,7 +16,7 @@ std::vector<torch::Tensor> lfw_cuda_backward(
     torch::Tensor query,
     torch::Tensor key,
     torch::Tensor value,
-    torch::Tensor old_value,
+    torch::Tensor delta_value,
     torch::Tensor final_state
 );
 
@@ -45,7 +45,7 @@ std::vector<at::Tensor> lfw_backward(
     torch::Tensor query,
     torch::Tensor key,
     torch::Tensor value,
-    torch::Tensor old_value,
+    torch::Tensor delta_value,
     torch::Tensor final_state
 ) {
   CHECK_INPUT(grad_output);
@@ -53,7 +53,7 @@ std::vector<at::Tensor> lfw_backward(
   CHECK_INPUT(query);
   CHECK_INPUT(key);
   CHECK_INPUT(value);
-  CHECK_INPUT(old_value);
+  CHECK_INPUT(delta_value);
   CHECK_INPUT(final_state);
   
   return lfw_cuda_backward(
@@ -62,7 +62,7 @@ std::vector<at::Tensor> lfw_backward(
     query,
     key,
     value,
-    old_value,
+    delta_value,
     final_state
   );
 }

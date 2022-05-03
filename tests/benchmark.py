@@ -76,8 +76,7 @@ def main():
     device = 'cuda'
     providers = ('torch', 'LFWFunction', 'DFWFunction')
     seqlens = tuple(range(8, 1024, 128))
-    # TODO:
-    backward = False
+    backward = True
 
     dtype = torch.half
     bsz = 32

@@ -67,49 +67,38 @@ def t2dfw_torch_bw(
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """ Equivalent Torchscript implementation of backward pass for reference """
     # Recompute old values
-    olds = []
+    delta_vals = []
     for t in range(value.size(1)):
         old = state @ key[:, t].unsqueeze(-1)
         new = value[:, t].unsqueeze(-1)
+        delta = new - old
         out = (state @ query[:, t].unsqueeze(-1)).squeeze(-1)
 
         # [B, D, K]
-        state = state + (new - old) @ key[:, t].unsqueeze(-2)
-        olds.append(old)
+        state = state + delta @ key[:, t].unsqueeze(-2)
+        delta_vals.append(delta.squeeze(-1))
 
-    # Parallel d pass. Computes d_value, s_grad_k and d_state
+    # Parallel d pass. Computes d_value, d_state
     d_value = []
-    s_grad_ks = []
 
     cur_s_grad = grad_state.clone()
-    state = final_state.clone()
 
     for t in range(value.size(1)-1, -1, -1):
         q = query[:, t]
         k = key[:, t]
-        v = value[:, t]
         g = grad_output[:, t]
-        old = olds[t]
 
+        d_v = cur_s_grad @ k.unsqueeze(-1)
         # Parallel on d (reducing m)
-        d_value.append((cur_s_grad @ k.unsqueeze(-1)).squeeze(-1))
-
-        # Move state backwards
-        # Parallel on all (expansion)
-        state = state - (v.unsqueeze(-1) - old) @ k.unsqueeze(-2)
-
-        # [D, M] x [M, 1] => [D, 1] (parallel on d)
-        s_grad_k = cur_s_grad @ k.unsqueeze(-1)
-        s_grad_ks.append(s_grad_k)
+        d_value.append(d_v.squeeze(-1))
 
         # Apply delta rule derivative (deriv of s_t w.r.t. s_{t-1})
         # Parallel on all (expansion)
-        cur_s_grad -= s_grad_k @ k.unsqueeze(-2)
+        cur_s_grad -= d_v @ k.unsqueeze(-2)
         # Apply gradient from query
         # Parallel on all (expansion)
         cur_s_grad += g.unsqueeze(-1) @ q.unsqueeze(-2)
 
-    s_grad_ks = s_grad_ks[::-1]
     d_value = d_value[::-1]
     d_state = cur_s_grad
 
@@ -124,33 +113,31 @@ def t2dfw_torch_bw(
         k = key[:, t]
         v = value[:, t]
         g = grad_output[:, t]
-        old = olds[t]
-        s_grad_k = s_grad_ks[t]
+        delta_val = delta_vals[t]
+        d_v = d_value[t]
 
         # Move state backwards
         # Parallel on all (expansion)
-        state = state - (v.unsqueeze(-1) - old) @ k.unsqueeze(-2)
+        state = state - delta_val.unsqueeze(-1) @ k.unsqueeze(-2)
 
         # Only allow matrix-vector products (avoid matrix matrix products)
         # [1, D] x [D, M] => [1, M] (parallel on m)
-        a = (v.unsqueeze(-2) @ cur_s_grad).squeeze(-2)
-        # [D, M].T x [D, 1] => [M, 1] (parallel on m)
-        c = (cur_s_grad.transpose(1, 2) @ old).squeeze(-1)
-        # [[M, D] x [D, 1] => [M, 1] (parallel on m)
-        b = (state.transpose(1, 2) @ s_grad_k).squeeze(-1)
+        a = (delta_val.unsqueeze(-2) @ cur_s_grad).squeeze(-2)
+        # [1, D] x [D, M] => [1, M] (parallel on m)
+        b = (d_v.unsqueeze(-2) @ state).squeeze(-2)
         # Parallel on all (no reduction)
-        d_key.append(a-(b+c))
-
-        # Apply delta rule derivative (deriv of s_t w.r.t. s_{t-1})
-        # Parallel on all (expansion along m)
-        cur_s_grad -= s_grad_k @ k.unsqueeze(-2)
-        # Apply gradient from query
-        # Parallel on all (expansion)
-        cur_s_grad += g.unsqueeze(-1) @ q.unsqueeze(-2)
+        d_key.append(a - b)
 
         # Compute query gradient
         # Parallel on m (reducing d)
         d_query.append((g.unsqueeze(-2) @ state).squeeze(-2))
+
+        # Apply delta rule derivative (deriv of s_t w.r.t. s_{t-1})
+        # Parallel on all (expansion along m)
+        cur_s_grad -= d_v.unsqueeze(-1) @ k.unsqueeze(-2)
+        # Apply gradient from query
+        # Parallel on all (expansion)
+        cur_s_grad += g.unsqueeze(-1) @ q.unsqueeze(-2)
 
     d_query = d_query[::-1]
     d_key = d_key[::-1]
