@@ -34,7 +34,7 @@ class Test(unittest.TestCase):
 
         for bsz, seqlen, dim in bld_gen():
             mdim = math.ceil(dim / 2)
-            # bsz, seqlen, dim, mdim = (1, 2, 1, 1)
+            # bsz, seqlen, dim, mdim = (1, 4, 4, 4)
             print('test_cpp', bsz, seqlen, dim, mdim)
 
             value = torch.randn(bsz, seqlen, dim, dtype=dtype, device='cuda')
