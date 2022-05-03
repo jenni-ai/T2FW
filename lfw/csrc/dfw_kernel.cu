@@ -27,7 +27,7 @@ const unsigned int MAX_D_TPB = 1024;
  * @return __device__
  */
 template <typename scalar_t>
-__device__ void parallel_sum(
+__device__ scalar_t parallel_sum(
     scalar_t *shared_tile,
     int id,
     int size)
@@ -43,8 +43,14 @@ __device__ void parallel_sum(
         __syncthreads();
         step_size = step_size / 2;
     }
+    auto res = shared_tile[0];
+    __syncthreads();
+    return res;
 }
 
+/**
+ * @brief Runs each dimension d in parallel.
+ */
 template <typename scalar_t>
 __global__ void lfw_cuda_fwd_kernel(
     const scalar_t *query,
@@ -60,9 +66,9 @@ __global__ void lfw_cuda_fwd_kernel(
     int num_tiles,
     int tile_size)
 {
-    int tile_id = blockDim.x * blockIdx.x + threadIdx.x;
-    int d = blockDim.y * blockIdx.y + threadIdx.y;
-    int b = blockDim.z * blockIdx.z + threadIdx.z;
+    const int tile_id = blockDim.x * blockIdx.x + threadIdx.x;
+    const int d = blockDim.y * blockIdx.y + threadIdx.y;
+    const int b = blockDim.z * blockIdx.z + threadIdx.z;
 
     // Dynamic shared memory
     extern __shared__ char smem[];
@@ -73,16 +79,16 @@ __global__ void lfw_cuda_fwd_kernel(
 
     // NOTE: Shouldn't be possible to be out of bounds for (b and d)
 
+    // We will be looping from m_start to m_end (which is the size of a tile)
+    const int m_start = tile_id * tile_size;
+    const int m_end = m_start + tile_size;
+
     // b, d, m, m = 0
     int state_offset = (b * d_size + d) * m_size;
     // b, t, d, where t = 0
     int d_offset = (b * l_size) * d_size + d;
     // b, t, m, where t = 0, m = 0
-    int k_offset = (b * l_size) * m_size;
-
-    // We will be looping from m_start to m_end (which is the size of a tile)
-    int m_start = tile_id * tile_size;
-    int m_end = m_start + tile_size;
+    int m_offset = (b * l_size) * m_size;
 
     // Load current state
     for (int m = m_start; m < m_end && m < m_size; m++)
@@ -93,16 +99,16 @@ __global__ void lfw_cuda_fwd_kernel(
     // Go over each time step
     for (int t = 0; t < l_size; t++)
     {
+        // TODO: Could load value in SM since it's reused?
         auto curVal = value[d_offset];
         // Compute next state
         scalar_t out = 0;
         for (int m = m_start; m < m_end && m < m_size; m++)
         {
             // Add new value to state
-            // TODO: Could load value in SM...
-            cur_state[m] += curVal * key[k_offset + m];
+            cur_state[m] += curVal * key[m_offset + m];
             // Query the state
-            out += cur_state[m] * query[k_offset + m];
+            out += cur_state[m] * query[m_offset + m];
         }
 
         // Each tile produce its partial results
@@ -110,12 +116,10 @@ __global__ void lfw_cuda_fwd_kernel(
         __syncthreads();
 
         // Sum tile results via parallel reduction
-        parallel_sum(shared_tile, tile_id, num_tiles);
-        outputs[d_offset] = shared_tile[0];
-        __syncthreads();
+        outputs[d_offset] = parallel_sum(shared_tile, tile_id, num_tiles);
 
         d_offset += d_size;
-        k_offset += m_size;
+        m_offset += m_size;
     }
 
     // Store final state
@@ -127,46 +131,109 @@ __global__ void lfw_cuda_fwd_kernel(
     }
 }
 
+/**
+ * @brief Computes the gradient of query and key.
+ * Runs each dimension m in parallel.
+ * Tiles along dimension d.
+ */
 // template <typename scalar_t>
-// __global__ void lfw_cuda_bwd_kernel(
-//     const scalar_t *grad_output, const scalar_t *grad_state,
-//     const scalar_t *f, const scalar_t *query,
-//     const scalar_t *f_key, const scalar_t *outputs,
-//     scalar_t *s_grad, scalar_t *d_state,
-//     int b_size, int l_size, int d_size, int k_size)
+// __global__ void lfw_cuda_bwd_key_kernel(
+//     const scalar_t *grad_output,
+//     const scalar_t *grad_state,
+//     const scalar_t *query,
+//     const scalar_t *key,
+//     const scalar_t *value,
+//     const scalar_t *outputs,
+//     const scalar_t *final_state,
+//     scalar_t *d_query,
+//     scalar_t *d_key,
+//     scalar_t *d_value,
+//     scalar_t *d_state,
+//     int b_size,
+//     int l_size,
+//     int d_size,
+//     int m_size,
+//     int num_tiles,
+//     int tile_size)
 // {
-//     int k = blockDim.x * blockIdx.x + threadIdx.x;
-//     int d = blockDim.y * blockIdx.y + threadIdx.y;
-//     int b = blockDim.z * blockIdx.z + threadIdx.z;
+//     const int tile_id = blockDim.x * blockIdx.x + threadIdx.x;
+//     const int m = blockDim.y * blockIdx.y + threadIdx.y;
+//     const int b = blockDim.z * blockIdx.z + threadIdx.z;
 
-//     // Check bounds
-//     if (b < b_size && d < d_size && k < k_size)
+//     // Dynamic shared memory
+//     extern __shared__ char smem[];
+//     // Holds state (for this specific dimension d)
+//     scalar_t *cur_state = reinterpret_cast<scalar_t *>(smem);
+//     // Holds d_state results
+//     scalar_t *cur_s_grad = &cur_state[d_size];
+//     // Holds tile results (size = num_tiles)
+//     scalar_t *shared_tile = &cur_s_grad[d_size];
+
+//     // NOTE: Shouldn't be possible to be out of bounds for (b and d)
+
+//     // We will be looping from m_start to m_end (which is the size of a tile)
+//     const int m_start = tile_id * tile_size;
+//     const int m_end = m_start + tile_size;
+
+//     const int maxT = l_size - 1;
+//     // b, d, m = 0
+//     const int state_offset = (b * d_size + d) * m_size;
+//     // b, t, d, where t = max, d=0
+//     // TODO
+//     int d_offset = (b * l_size + maxT) * d_size;
+//     //  + d;
+//     // b, t, m, where t = max, m = 0
+//     int m_offset = (b * l_size + maxT) * m_size;
+
+//     for (int m = m_start; m < m_end && m < m_size; m++)
 //     {
-//         // b, l, d, k
-//         const int maxT = l_size - 1;
-//         const int state_flat_offset = (b * d_size + d) * k_size + k;
-//         int state_offset = ((b * l_size + maxT) * d_size + d) * k_size + k;
-//         // b, t, d, where t = max
-//         int d_offset = (b * l_size + maxT) * d_size + d;
-//         // b, t, k, where t = max
-//         int k_offset = (b * l_size + maxT) * k_size + k;
+//         // Load final state
+//         cur_state[m] = final_state[state_offset + m];
+//         // Load final state's gradient
+//         cur_s_grad[m] = grad_state[state_offset + m];
+//     }
 
-//         auto cur_s_grad = grad_state[state_flat_offset];
-
-//         for (int t = 0; t < l_size; t++)
+//     // Loops from final timestep to first timestep
+//     for (int t = 0; t < l_size; t++)
+//     {
+//         auto curVal = value[d_offset];
+//         scalar_t tmp_d_query = 0;
+//         scalar_t tmp_d_key = 0;
+//         for (int m = m_start; m < m_end && m < m_size; m++)
 //         {
-//             cur_s_grad = grad_output[d_offset] * query[k_offset] + cur_s_grad;
-//             s_grad[state_offset] = cur_s_grad;
+//             cur_s_grad[m] = grad_output[d_offset] * query[m_offset + m] + cur_s_grad[m];
 
-//             // Compute next state
-//             // Apply current f to gradient
-//             cur_s_grad *= f[d_offset] * f_key[k_offset];
+//             // d_query = grad_output * state
+//             tmp_d_query += grad_output[d_offset] * cur_state[m];
 
-//             state_offset -= d_size * k_size;
-//             d_offset -= d_size;
-//             k_offset -= k_size;
+//             // Compute previous state (reversing)
+//             cur_state[m] -= curVal * key[m_offset + m];
+
+//             // TODO: Apply delta rule derivative
+//             // cur_s_grad[m] *= f[d_offset] * f_key[m_offset];
+
+//             tmp_d_key += curVal * cur_state[m];
 //         }
-//         d_state[state_flat_offset] = cur_s_grad;
+
+//         // Each tile produce its partial results
+//         shared_tile[tile_id] = tmp_d_query;
+//         __syncthreads();
+//         // Sum tile results via parallel reduction
+//         d_query[m_offset] = parallel_sum(shared_tile, tile_id, num_tiles);
+
+//         // Each tile produce its partial results
+//         shared_tile[tile_id] = tmp_d_key;
+//         __syncthreads();
+//         // Sum tile results via parallel reduction
+//         d_key[m_offset] = parallel_sum(shared_tile, tile_id, num_tiles);
+
+//         d_offset -= d_size;
+//         m_offset -= m_size;
+//     }
+
+//     for (int m = m_start; m < m_end && m < m_size; m++)
+//     {
+//         d_state[state_offset + m] = cur_s_grad[m];
 //     }
 // }
 
@@ -236,12 +303,6 @@ std::vector<torch::Tensor> lfw_cuda_forward(
         ceil_div(D, threads.y),
         B);
 
-    // TODO:
-    // std::cout << num_tiles;
-    // std::cout << "\n";
-    // std::cout << tile_size;
-    // std::cout << "\n";
-
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(
         value.scalar_type(),
         "lfw_cuda_fwd_kernel",
@@ -258,55 +319,77 @@ std::vector<torch::Tensor> lfw_cuda_forward(
     return {outputs, final_state};
 }
 
-// std::vector<torch::Tensor> lfw_cuda_backward(
-//     torch::Tensor grad_output,
-//     torch::Tensor grad_state,
-//     torch::Tensor query,
-//     torch::Tensor outputs)
-// {
-//     // Length
-//     const auto L = query.size(1);
-//     // Batch
-//     const auto B = grad_state.size(0);
-//     // Dimension
-//     const auto D = grad_state.size(1);
-//     // Expansion dimension
-//     const auto K = grad_state.size(2);
+std::vector<torch::Tensor> lfw_cuda_backward(
+    torch::Tensor grad_output,
+    torch::Tensor grad_state,
+    torch::Tensor query,
+    torch::Tensor key,
+    torch::Tensor value,
+    torch::Tensor outputs,
+    torch::Tensor final_state)
+{
+    // Length
+    const auto L = query.size(1);
+    // Batch
+    const auto B = grad_state.size(0);
+    // Dimension
+    const auto D = grad_state.size(1);
+    // Expansion dimension
+    const auto M = grad_state.size(2);
 
-//     // Kernel outputs
-//     auto s_grad = torch::empty(
-//         {B, L, D, K},
-//         torch::TensorOptions()
-//             .dtype(grad_state.dtype())
-//             .device(grad_state.device()));
-//     auto d_state = torch::empty(
-//         {B, D, K},
-//         torch::TensorOptions()
-//             .dtype(grad_state.dtype())
-//             .device(grad_state.device()));
+    // Kernel outputs
+    auto d_query = torch::empty(
+        {B, L, M},
+        torch::TensorOptions()
+            .dtype(grad_state.dtype())
+            .device(grad_state.device()));
+    auto d_key = torch::empty(
+        {B, L, M},
+        torch::TensorOptions()
+            .dtype(grad_state.dtype())
+            .device(grad_state.device()));
+    auto d_value = torch::empty(
+        {B, L, M},
+        torch::TensorOptions()
+            .dtype(grad_state.dtype())
+            .device(grad_state.device()));
+    auto d_state = torch::empty(
+        {B, D, M},
+        torch::TensorOptions()
+            .dtype(grad_state.dtype())
+            .device(grad_state.device()));
 
-//     const auto numMThreads = std::min(nextPowerOf2(K), MAX_TILES);
-//     const auto numDThreads = std::min(
-//         nextPowerOf2(D),
-//         std::min(MAX_TPB / numMThreads, MAX_D_TPB));
+    // TODO: Maybe optimize for tiles = tile_size?
+    // TODO: Test with lower max k tpb
+    // TODO: Would be more efficient to pack rest of dimension into same SM
+    const auto num_tiles = std::min(nextPowerOf2(D), MAX_TILES);
+    // Elements to process per tile
+    const auto tile_size = ceil_div(D, num_tiles);
+    // Cannot use same sm for different dims
+    const dim3 threads(num_tiles, 1, 1);
+    const dim3 blocks(
+        1,
+        ceil_div(M, threads.y),
+        B);
 
-//     const dim3 threads(numMThreads, numDThreads, 1);
-//     const dim3 blocks(
-//         ceil_div(K, threads.x),
-//         ceil_div(D, threads.y),
-//         B);
+    // AT_DISPATCH_FLOATING_TYPES_AND_HALF(
+    //     grad_state.scalar_type(),
+    //     "lfw_cuda_bwd_key_kernel",
+    //     ([&]
+    //      { lfw_cuda_bwd_key_kernel<scalar_t><<<blocks, threads, (D * 2 + num_tiles) * sizeof(scalar_t)>>>(
+    //            grad_output.data<scalar_t>(),
+    //            grad_state.data<scalar_t>(),
+    //            query.data<scalar_t>(),
+    //            key.data<scalar_t>(),
+    //            value.data<scalar_t>(),
+    //            outputs.data<scalar_t>(),
+    //            final_state.data<scalar_t>(),
+    //            // Outputs
+    //            d_query.data<scalar_t>(),
+    //            d_key.data<scalar_t>(),
+    //            d_value.data<scalar_t>(),
+    //            d_state.data<scalar_t>(),
+    //            B, L, D, M, num_tiles, tile_size); }));
 
-//     AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-//         grad_state.scalar_type(),
-//         "lfw_cuda_bwd_kernel",
-//         ([&]
-//          { lfw_cuda_bwd_kernel<scalar_t><<<blocks, threads>>>(
-//                grad_output.data<scalar_t>(),
-//                grad_state.data<scalar_t>(),
-//                query.data<scalar_t>(),
-//                outputs.data<scalar_t>(),
-//                s_grad.data<scalar_t>(),
-//                d_state.data<scalar_t>(),
-//                B, L, D, K); }));
-//     return {s_grad, d_state};
-// }
+    return {d_query, d_key, d_value, d_state};
+}
