@@ -4,7 +4,7 @@ import unittest
 import numpy as np
 import torch
 import torch.nn.functional as F
-from lfw.torch import t2dfw_torch
+from lfw.torch import t2dfw_torch, t2dfw_torch_bw
 from lfw.functional_dfw import DFWFunction
 
 
@@ -34,10 +34,12 @@ class Test(unittest.TestCase):
 
         for bsz, seqlen, dim in bld_gen():
             mdim = math.ceil(dim / 2)
-            # bsz, seqlen, dim, mdim = (1, 4, 1, 3)
+            # bsz, seqlen, dim, mdim = (1, 2, 1, 1)
             print('test_cpp', bsz, seqlen, dim, mdim)
 
             value = torch.randn(bsz, seqlen, dim, dtype=dtype, device='cuda')
+            # query, key = (torch.randn(bsz, seqlen, mdim, dtype=dtype, device='cuda')
+            #               for _ in range(2))
             query, key = (torch.randn(bsz, seqlen, mdim, dtype=dtype, device='cuda').softmax(dim=-1)
                           for _ in range(2))
             state = torch.randn(bsz, dim, mdim, dtype=dtype,
@@ -50,18 +52,23 @@ class Test(unittest.TestCase):
             ref_output, ref_state = t2dfw_torch(*input_vars)
             grad = torch.randn_like(ref_output)
             grad_state = torch.randn_like(ref_state)
-            # ref_output.backward(grad, retain_graph=True)
-            # ref_state.backward(grad_state)
-            # ref_grads = tuple(v.grad for v in input_vars)
+            ref_output.backward(grad, retain_graph=True)
+            ref_state.backward(grad_state)
+            ref_grads = tuple(v.grad for v in input_vars)
 
             # Clear grad
-            # for var in input_vars:
-            #     var.grad = None
+            for var in input_vars:
+                var.grad = None
 
             fast_output, fast_state = DFWFunction.apply(*input_vars)
             # fast_output.backward(grad, retain_graph=True)
             # fast_state.backward(grad_state)
             # fast_grads = tuple(v.grad for v in input_vars)
+            with torch.no_grad():
+                fast_grads = tuple(t2dfw_torch_bw(
+                    grad, grad_state,
+                    query, key, value, state, fast_state
+                ))
 
             try:
                 assert torch.allclose(ref_output, fast_output, atol=1e-2, rtol=1e-1), (
@@ -73,36 +80,36 @@ class Test(unittest.TestCase):
                 print('fast_output', fast_output, fast_output.size())
                 raise e
 
-            # assert len(ref_grads) == len(fast_grads)
+            assert len(ref_grads) == len(fast_grads)
 
-            # errored = None
+            errored = None
 
-            # try:
-            #     assert torch.allclose(ref_output, fast_output, atol=1e-2, rtol=1), (
-            #         f'The maximum difference between ref and fast is '
-            #         f'{torch.max(torch.abs(ref_output - fast_output))}'
-            #     )
-            # except Exception as e:
-            #     print('ref_output', ref_output)
-            #     print('fast_output', fast_output)
-            #     print()
-            #     errored = e
+            try:
+                assert torch.allclose(ref_output, fast_output, atol=1e-2, rtol=1), (
+                    f'The maximum difference between ref and fast is '
+                    f'{torch.max(torch.abs(ref_output - fast_output))}'
+                )
+            except Exception as e:
+                print('ref_output', ref_output)
+                print('fast_output', fast_output)
+                print()
+                errored = e
 
-            # for i, (ref, out) in enumerate(zip(ref_grads, fast_grads)):
-            #     try:
-            #         # Estimation of 0.3 should lead to convergence
-            #         assert torch.allclose(ref, out, atol=0.1, rtol=1e-1), (
-            #             f'The maximum difference between ref and out is '
-            #             f'{torch.max(torch.abs(ref - out))}'
-            #         )
-            #     except Exception as e:
-            #         print(f'ref grad {i} {ref}')
-            #         print(f'out grad {i} {out}')
-            #         print()
-            #         errored = e
+            for i, (ref, out) in enumerate(zip(ref_grads, fast_grads)):
+                try:
+                    # Estimation of 0.3 should lead to convergence
+                    assert torch.allclose(ref, out, atol=0.1, rtol=1e-1), (
+                        f'The maximum difference between ref and out is '
+                        f'{torch.max(torch.abs(ref - out))}'
+                    )
+                except Exception as e:
+                    print(f'ref grad {i} {ref}')
+                    print(f'out grad {i} {out}')
+                    print()
+                    errored = e
 
-            # if errored:
-            #     raise errored
+            if errored:
+                raise errored
 
 
 if __name__ == '__main__':
