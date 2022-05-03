@@ -37,7 +37,7 @@ class DFWFunction(torch.autograd.Function):
         assert query.dtype == value.dtype
         assert state.dtype == value.dtype
 
-        outputs, final_state = torch.ops.dfw.forward(
+        outputs, final_state, old_value = torch.ops.dfw.forward(
             query, key, value,  state
         )
 
@@ -45,20 +45,20 @@ class DFWFunction(torch.autograd.Function):
             query,
             key,
             value,
-            outputs,
+            old_value,
             final_state
         )
         return outputs, final_state
 
     @staticmethod
     def backward(ctx, grad_output, grad_state):
-        query, key, value, outputs, final_state = ctx.saved_tensors
+        query, key, value, old_value, final_state = ctx.saved_tensors
 
         assert grad_state.dtype == value.dtype
         assert grad_output.dtype == value.dtype
 
         res = torch.ops.dfw.backward(
             grad_output.contiguous(), grad_state.contiguous(),
-            query, key, value, outputs, final_state
+            query, key, value, old_value, final_state
         )
         return tuple(res)

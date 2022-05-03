@@ -77,7 +77,7 @@ def t2dfw_torch_bw(
         state = state + (new - old) @ key[:, t].unsqueeze(-2)
         olds.append(old)
 
-    # Parallel d pass. Computes d_value and s_grad_k
+    # Parallel d pass. Computes d_value, s_grad_k and d_state
     d_value = []
     s_grad_ks = []
 
@@ -100,6 +100,7 @@ def t2dfw_torch_bw(
 
         # [D, M] x [M, 1] => [D, 1] (parallel on d)
         s_grad_k = cur_s_grad @ k.unsqueeze(-1)
+        s_grad_ks.append(s_grad_k)
 
         # Apply delta rule derivative (deriv of s_t w.r.t. s_{t-1})
         # Parallel on all (expansion)
@@ -108,9 +109,9 @@ def t2dfw_torch_bw(
         # Parallel on all (expansion)
         cur_s_grad += g.unsqueeze(-1) @ q.unsqueeze(-2)
 
-        s_grad_ks.append(s_grad_k)
-
     s_grad_ks = s_grad_ks[::-1]
+    d_value = d_value[::-1]
+    d_state = cur_s_grad
 
     # Parallel m pass. Computes d_query and d_key
     d_query = []
@@ -141,7 +142,7 @@ def t2dfw_torch_bw(
         d_key.append(a-(b+c))
 
         # Apply delta rule derivative (deriv of s_t w.r.t. s_{t-1})
-        # Parallel on all (expansion)
+        # Parallel on all (expansion along m)
         cur_s_grad -= s_grad_k @ k.unsqueeze(-2)
         # Apply gradient from query
         # Parallel on all (expansion)
@@ -153,8 +154,6 @@ def t2dfw_torch_bw(
 
     d_query = d_query[::-1]
     d_key = d_key[::-1]
-    d_value = d_value[::-1]
-    d_state = cur_s_grad
 
     return torch.stack(d_query, dim=1), torch.stack(d_key, dim=1), torch.stack(d_value, dim=1), d_state
 

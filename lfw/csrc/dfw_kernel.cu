@@ -62,6 +62,7 @@ __global__ void lfw_cuda_fwd_kernel(
     const scalar_t *state,
     scalar_t *final_state,
     scalar_t *outputs,
+    scalar_t *old_value,
     int b_size,
     int l_size,
     int d_size,
@@ -134,6 +135,7 @@ __global__ void lfw_cuda_fwd_kernel(
         __syncthreads();
         // Write output
         outputs[d_offset] = q_out;
+        old_value[d_offset] = k_out;
 
         // Compute the delta
         auto curVal = value[d_offset] - k_out;
@@ -169,7 +171,7 @@ __global__ void lfw_cuda_bwd_kernel(
     const scalar_t *query,
     const scalar_t *key,
     const scalar_t *value,
-    const scalar_t *outputs,
+    const scalar_t *old_value,
     const scalar_t *final_state,
     scalar_t *d_query,
     scalar_t *d_key,
@@ -316,6 +318,12 @@ std::vector<torch::Tensor> lfw_cuda_forward(
             .dtype(value.dtype())
             .device(value.device()));
 
+    auto old_value = torch::empty(
+        {B, L, D},
+        torch::TensorOptions()
+            .dtype(value.dtype())
+            .device(value.device()));
+
     // TODO: Maybe optimize for tiles = tile_size?
     // TODO: Test with lower max k tpb
     // TODO: Would be more efficient to pack rest of dimension into same SM
@@ -345,9 +353,10 @@ std::vector<torch::Tensor> lfw_cuda_forward(
                state.data<scalar_t>(),
                final_state.data<scalar_t>(),
                outputs.data<scalar_t>(),
+               old_value.data<scalar_t>(),
                B, L, D, M, num_tiles, tile_size); }));
 
-    return {outputs, final_state};
+    return {outputs, final_state, old_value};
 }
 
 std::vector<torch::Tensor> lfw_cuda_backward(
@@ -356,7 +365,7 @@ std::vector<torch::Tensor> lfw_cuda_backward(
     torch::Tensor query,
     torch::Tensor key,
     torch::Tensor value,
-    torch::Tensor outputs,
+    torch::Tensor old_value,
     torch::Tensor final_state)
 {
     // Length
@@ -413,7 +422,7 @@ std::vector<torch::Tensor> lfw_cuda_backward(
                query.data<scalar_t>(),
                key.data<scalar_t>(),
                value.data<scalar_t>(),
-               outputs.data<scalar_t>(),
+               old_value.data<scalar_t>(),
                final_state.data<scalar_t>(),
                // Outputs
                d_query.data<scalar_t>(),
