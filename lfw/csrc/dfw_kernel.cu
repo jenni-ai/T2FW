@@ -100,9 +100,24 @@ __global__ void lfw_cuda_fwd_kernel(
     for (int t = 0; t < l_size; t++)
     {
         // TODO: Could load value in SM since it's reused?
-        auto curVal = value[d_offset];
-        // Compute next state
         scalar_t out = 0;
+
+        // Query the old value
+        for (int m = m_start; m < m_end && m < m_size; m++)
+        {
+            out += cur_state[m] * key[m_offset + m];
+        }
+        // Each tile produce its partial results
+        shared_tile[tile_id] = out;
+        __syncthreads();
+        // Sum tile results via parallel reduction
+        out = parallel_sum(shared_tile, tile_id, num_tiles);
+
+        // Compute the delta
+        auto curVal = value[d_offset] - out;
+
+        out = 0;
+        // Compute next state
         for (int m = m_start; m < m_end && m < m_size; m++)
         {
             // Add new value to state
