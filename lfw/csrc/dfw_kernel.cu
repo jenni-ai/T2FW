@@ -9,7 +9,7 @@
 // Maximum threads per block
 const unsigned int MAX_TPB = 1024;
 // Maximum thread for 1st dim of block
-// TODO: Should be dynamic
+// TODO: Should be dynamically set based on m
 const unsigned int MAX_TILES = 16;
 // const unsigned int MAX_TILES = 1024;
 // Maximum thread for 2nd dim of block
@@ -21,31 +21,34 @@ const unsigned int MAX_D_TPB = 1024;
  * @brief Performs parallel sum of an array, leaving the result in index 0.
  *
  * @tparam scalar_t
- * @param shared_tile
+ * @param arr
  * @param id
  * @param size
  * @return __device__
  */
 template <typename scalar_t>
-__device__ scalar_t parallel_sum(
-    scalar_t *shared_tile,
-    int id,
-    int size)
+__device__ void parallel_sum(
+    scalar_t *arr,
+    const int id,
+    const int size,
+    const int width)
 {
     int step_size = size / 2;
     while (step_size > 0)
     {
         if (id < step_size)
         {
-            // Reduce to the left side
-            shared_tile[id] += shared_tile[id + step_size];
+#pragma unroll
+            for (int w = 0; w < width; w++)
+            {
+                // Reduce to the left side
+                auto curPos = id * width + w;
+                arr[curPos] += arr[curPos + step_size * width];
+            }
         }
         __syncthreads();
         step_size = step_size / 2;
     }
-    auto res = shared_tile[0];
-    __syncthreads();
-    return res;
 }
 
 /**
@@ -82,6 +85,7 @@ __global__ void lfw_cuda_fwd_kernel(
     // We will be looping from m_start to m_end (which is the size of a tile)
     const int m_start = tile_id * tile_size;
     const int m_end = m_start + tile_size;
+    const int width = 2;
 
     // b, d, m, m = 0
     int state_offset = (b * d_size + d) * m_size;
@@ -100,46 +104,53 @@ __global__ void lfw_cuda_fwd_kernel(
     for (int t = 0; t < l_size; t++)
     {
         // TODO: Could load value in SM since it's reused?
-        scalar_t out = 0;
+        scalar_t q_out = 0;
+        scalar_t k_out = 0;
 
-        // Query the old value
         for (int m = m_start; m < m_end && m < m_size; m++)
         {
-            out += cur_state[m] * key[m_offset + m];
+            // Query the state
+            q_out += cur_state[m] * query[m_offset + m];
+            // Query the old value associated with key
+            k_out += cur_state[m] * key[m_offset + m];
         }
         // Each tile produce its partial results
-        shared_tile[tile_id] = out;
+        shared_tile[tile_id * width] = q_out;
+        shared_tile[tile_id * width + 1] = k_out;
         __syncthreads();
         // Sum tile results via parallel reduction
-        out = parallel_sum(shared_tile, tile_id, num_tiles);
+        // parallel_sum(shared_tile, tile_id, num_tiles, width);
+        // q_out = shared_tile[0];
+        // k_out = shared_tile[1];
+
+        // Non-parallel reduction seems to be faster
+        q_out = 0;
+        k_out = 0;
+        for (int i = 0; i < num_tiles; i++)
+        {
+            q_out += shared_tile[i * width];
+            k_out += shared_tile[i * width + 1];
+        }
+        __syncthreads();
+        // Write output
+        outputs[d_offset] = q_out;
 
         // Compute the delta
-        auto curVal = value[d_offset] - out;
+        auto curVal = value[d_offset] - k_out;
 
-        out = 0;
         // Compute next state
+        // TODO: Could merge this loop?
         for (int m = m_start; m < m_end && m < m_size; m++)
         {
             // Add new value to state
             cur_state[m] += curVal * key[m_offset + m];
-            // Query the state
-            out += cur_state[m] * query[m_offset + m];
         }
-
-        // Each tile produce its partial results
-        shared_tile[tile_id] = out;
-        __syncthreads();
-
-        // Sum tile results via parallel reduction
-        outputs[d_offset] = parallel_sum(shared_tile, tile_id, num_tiles);
 
         d_offset += d_size;
         m_offset += m_size;
     }
 
     // Store final state
-
-    // Load current state
     for (int m = m_start; m < m_end && m < m_size; m++)
     {
         final_state[state_offset + m] = cur_state[m];
@@ -322,7 +333,7 @@ std::vector<torch::Tensor> lfw_cuda_forward(
         value.scalar_type(),
         "lfw_cuda_fwd_kernel",
         ([&]
-         { lfw_cuda_fwd_kernel<scalar_t><<<blocks, threads, (M + num_tiles) * sizeof(scalar_t)>>>(
+         { lfw_cuda_fwd_kernel<scalar_t><<<blocks, threads, (M + num_tiles * 2) * sizeof(scalar_t)>>>(
                query.data<scalar_t>(),
                key.data<scalar_t>(),
                value.data<scalar_t>(),

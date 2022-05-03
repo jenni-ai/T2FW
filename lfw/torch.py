@@ -44,10 +44,11 @@ def t2dfw_torch(
     for t in range(value.size(1)):
         old = state @ key[:, t].unsqueeze(-1)
         new = value[:, t].unsqueeze(-1)
+        out = (state @ query[:, t].unsqueeze(-1)).squeeze(-1)
+
         # [B, D, K]
         state = state + (new - old) @ key[:, t].unsqueeze(-2)
 
-        out = (state @ query[:, t].unsqueeze(-1)).squeeze(-1)
         outputs.append(out)
     outputs = torch.stack(outputs, dim=1)
 
