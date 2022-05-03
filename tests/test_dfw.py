@@ -29,7 +29,6 @@ class Test(unittest.TestCase):
     def test_cpp(self):
         torch.manual_seed(1)
         # Pure additive may cause numerical issue under fp16
-        # TODO:
         dtype = torch.float
 
         for bsz, seqlen, dim in bld_gen():
@@ -38,10 +37,13 @@ class Test(unittest.TestCase):
             print('test_cpp', bsz, seqlen, dim, mdim)
 
             value = torch.randn(bsz, seqlen, dim, dtype=dtype, device='cuda')
-            # query, key = (torch.randn(bsz, seqlen, mdim, dtype=dtype, device='cuda')
-            #               for _ in range(2))
-            query, key = (torch.randn(bsz, seqlen, mdim, dtype=dtype, device='cuda').softmax(dim=-1)
-                          for _ in range(2))
+            query, key = (
+                torch.randn(bsz, seqlen, mdim, dtype=dtype, device='cuda') for _ in range(2)
+            )
+            # Allow keys to be scaled
+            key = torch.softmax(key, dim=-1) * \
+                torch.sigmoid(key.mean(dim=-1, keepdim=True))
+
             state = torch.randn(bsz, dim, mdim, dtype=dtype,
                                 device='cuda')
 

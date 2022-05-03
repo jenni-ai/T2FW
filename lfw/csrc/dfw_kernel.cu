@@ -4,16 +4,13 @@
 #include <cuda_runtime.h>
 
 #include <vector>
+#include <cmath>
 
 // TODO: These constants may be device-dependent
 // Maximum threads per block
 const unsigned int MAX_TPB = 1024;
 // Maximum thread for 1st dim of block
-// TODO: Should be dynamically set based on m
-const unsigned int MAX_TILES = 16;
-// const unsigned int MAX_TILES = 1024;
-// Maximum thread for 2nd dim of block
-const unsigned int MAX_D_TPB = 1024;
+const unsigned int MAX_X_TPB = MAX_TPB;
 
 #define ceil_div(a, b) (((a) + (b)-1) / (b))
 
@@ -104,7 +101,6 @@ __global__ void lfw_cuda_fwd_kernel(
     // Go over each time step
     for (int t = 0; t < l_size; t++)
     {
-        // TODO: Could load value in SM since it's reused?
         scalar_t q_out = 0;
         scalar_t k_out = 0;
 
@@ -119,11 +115,6 @@ __global__ void lfw_cuda_fwd_kernel(
         shared_tile[tile_id * width] = q_out;
         shared_tile[tile_id * width + 1] = k_out;
         __syncthreads();
-        // Sum tile results via parallel reduction
-        // parallel_sum(shared_tile, tile_id, num_tiles, width);
-        // q_out = shared_tile[0];
-        // k_out = shared_tile[1];
-
         // Non-parallel reduction seems to be faster
         q_out = 0;
         k_out = 0;
@@ -271,7 +262,6 @@ __global__ void lfw_cuda_bwd_qk_kernel(
     int num_tiles,
     int tile_size)
 {
-    // TODO: Try different ordering
     const int tile_id = blockDim.x * blockIdx.x + threadIdx.x;
     const int m = blockDim.y * blockIdx.y + threadIdx.y;
     const int b = blockDim.z * blockIdx.z + threadIdx.z;
@@ -408,10 +398,9 @@ std::vector<torch::Tensor> lfw_cuda_forward(
             .dtype(value.dtype())
             .device(value.device()));
 
-    // TODO: Maybe optimize for tiles = tile_size?
-    // TODO: Test with lower max k tpb
     // TODO: Would be more efficient to pack rest of dimension into same SM
-    const auto num_tiles = std::min(nextPowerOf2(M), MAX_TILES);
+    const auto max_tiles = std::min((uint)(std::sqrt(M) * 2), MAX_X_TPB);
+    const auto num_tiles = std::min(nextPowerOf2(M), max_tiles);
     // Elements to process per tile
     const auto tile_size = ceil_div(M, num_tiles);
     // std::min(
@@ -420,11 +409,7 @@ std::vector<torch::Tensor> lfw_cuda_forward(
 
     // Cannot use same sm for different dims
     const dim3 threads(num_tiles, 1, 1);
-    const dim3 blocks(
-        1,
-        // ceil_div(M, threads.x),
-        ceil_div(D, threads.y),
-        B);
+    const dim3 blocks(1, D, B);
 
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(
         value.scalar_type(),
@@ -482,15 +467,14 @@ std::vector<torch::Tensor> lfw_cuda_backward(
             .dtype(grad_state.dtype())
             .device(grad_state.device()));
 
-    // TODO: Maybe optimize for tiles = tile_size?
-    // TODO: Test with lower max k tpb
     // TODO: Would be more efficient to pack rest of dimension into same SM
-    auto num_tiles = std::min(nextPowerOf2(M), MAX_TILES);
+    auto max_tiles = std::min((uint)(std::sqrt(M) * 2), MAX_X_TPB);
+    auto num_tiles = std::min(nextPowerOf2(M), max_tiles);
     // Elements to process per tile
     auto tile_size = ceil_div(M, num_tiles);
     // Cannot use same sm for different dims
     dim3 threads(num_tiles, 1, 1);
-    dim3 blocks(1, ceil_div(D, threads.y), B);
+    dim3 blocks(1, D, B);
 
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(
         grad_state.scalar_type(),
@@ -506,12 +490,13 @@ std::vector<torch::Tensor> lfw_cuda_backward(
                d_state.data<scalar_t>(),
                B, L, D, M, num_tiles, tile_size); }));
 
-    num_tiles = std::min(nextPowerOf2(D), MAX_TILES);
+    max_tiles = std::min((uint)(std::sqrt(D) * 2), MAX_X_TPB);
+    num_tiles = std::min(nextPowerOf2(D), max_tiles);
     // Elements to process per tile
     tile_size = ceil_div(D, num_tiles);
     // Cannot use same sm for different dims
     dim3 threads_qk(num_tiles, 1, 1);
-    dim3 blocks_qk(1, ceil_div(M, threads.y), B);
+    dim3 blocks_qk(1, M, B);
 
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(
         grad_state.scalar_type(),
