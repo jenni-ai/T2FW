@@ -170,11 +170,6 @@ __global__ void lfw_cuda_bwd_value_kernel(
     const scalar_t *grad_state,
     const scalar_t *query,
     const scalar_t *key,
-    const scalar_t *value,
-    const scalar_t *delta_value,
-    const scalar_t *final_state,
-    scalar_t *d_query,
-    scalar_t *d_key,
     scalar_t *d_value,
     scalar_t *d_state,
     int b_size,
@@ -264,13 +259,11 @@ __global__ void lfw_cuda_bwd_qk_kernel(
     const scalar_t *grad_state,
     const scalar_t *query,
     const scalar_t *key,
-    const scalar_t *value,
     const scalar_t *delta_value,
     const scalar_t *final_state,
     scalar_t *d_query,
     scalar_t *d_key,
     const scalar_t *d_value,
-    const scalar_t *d_state,
     int b_size,
     int l_size,
     int d_size,
@@ -455,7 +448,6 @@ std::vector<torch::Tensor> lfw_cuda_backward(
     torch::Tensor grad_state,
     torch::Tensor query,
     torch::Tensor key,
-    torch::Tensor value,
     torch::Tensor delta_value,
     torch::Tensor final_state)
 {
@@ -509,12 +501,7 @@ std::vector<torch::Tensor> lfw_cuda_backward(
                grad_state.data<scalar_t>(),
                query.data<scalar_t>(),
                key.data<scalar_t>(),
-               value.data<scalar_t>(),
-               delta_value.data<scalar_t>(),
-               final_state.data<scalar_t>(),
                // Outputs
-               d_query.data<scalar_t>(),
-               d_key.data<scalar_t>(),
                d_value.data<scalar_t>(),
                d_state.data<scalar_t>(),
                B, L, D, M, num_tiles, tile_size); }));
@@ -535,14 +522,12 @@ std::vector<torch::Tensor> lfw_cuda_backward(
                grad_state.data<scalar_t>(),
                query.data<scalar_t>(),
                key.data<scalar_t>(),
-               value.data<scalar_t>(),
                delta_value.data<scalar_t>(),
                final_state.data<scalar_t>(),
                // Outputs
                d_query.data<scalar_t>(),
                d_key.data<scalar_t>(),
                d_value.data<scalar_t>(),
-               d_state.data<scalar_t>(),
                B, L, D, M, num_tiles, tile_size); }));
 
     return {d_query, d_key, d_value, d_state};

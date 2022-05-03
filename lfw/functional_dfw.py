@@ -15,9 +15,7 @@ load(
         os.path.join(os.path.dirname(__file__), "csrc", "dfw.cpp"),
         os.path.join(os.path.dirname(__file__), "csrc", "dfw_kernel.cu"),
     ],
-    extra_cflags=['-O0'],
-    # TODO:
-    # extra_cflags=['-O3'],
+    extra_cflags=['-O3'],
     is_python_module=False,
     verbose=False
 )
@@ -44,7 +42,7 @@ class DFWFunction(torch.autograd.Function):
         ctx.save_for_backward(
             query,
             key,
-            value,
+
             delta_value,
             final_state
         )
@@ -52,13 +50,13 @@ class DFWFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output, grad_state):
-        query, key, value, delta_value, final_state = ctx.saved_tensors
+        query, key,  delta_value, final_state = ctx.saved_tensors
 
-        assert grad_state.dtype == value.dtype
-        assert grad_output.dtype == value.dtype
+        assert grad_state.dtype == delta_value.dtype
+        assert grad_output.dtype == delta_value.dtype
 
         res = torch.ops.dfw.backward(
             grad_output.contiguous(), grad_state.contiguous(),
-            query, key, value, delta_value, final_state
+            query, key, delta_value, final_state
         )
         return tuple(res)
