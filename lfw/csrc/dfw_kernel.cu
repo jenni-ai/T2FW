@@ -127,7 +127,6 @@ __global__ void lfw_cuda_fwd_kernel(
     // Holds state (for this specific dimension d) (size = m_size)
     scalar_t *cur_state = reinterpret_cast<scalar_t *>(smem);
     // Holding tile results
-    // scalar_t *shared_tile = &cur_state[m_size];
     Vec<2, scalar_t> *shared_tile = reinterpret_cast<Vec<2, scalar_t> *>(&cur_state[m_size]);
 
     // NOTE: Shouldn't be possible to be out of bounds for (b and d)
@@ -225,7 +224,7 @@ __global__ void lfw_cuda_bwd_value_kernel(
     // Holds recursive gradient of states (for this specific dimension d)
     scalar_t *cur_s_grad = reinterpret_cast<scalar_t *>(smem);
     // Holds tile results (size = num_tiles)
-    scalar_t *shared_tile = &cur_s_grad[d_size];
+    Vec<1, scalar_t> *shared_tile = reinterpret_cast<Vec<1, scalar_t> *>(&cur_s_grad[d_size]);
 
     // NOTE: Shouldn't be possible to be out of bounds for (b and d)
 
@@ -256,14 +255,12 @@ __global__ void lfw_cuda_bwd_value_kernel(
             // Compute s_grad * k
             d_v += cur_s_grad[m] * key[m_offset + m];
         }
-        shared_tile[tile_id] = d_v;
+
+        shared_tile[tile_id].vec[0] = d_v;
         __syncthreads();
-        d_v = 0;
-        for (int i = 0; i < num_tiles; i++)
-        {
-            d_v += shared_tile[i];
-        }
-        __syncthreads();
+        auto res = sumReduc<1>(shared_tile, tile_id, num_tiles);
+        d_v = res.vec[0];
+
         d_value[d_offset] = d_v;
 
         // Apply delta rule derivatives
@@ -319,7 +316,7 @@ __global__ void lfw_cuda_bwd_qk_kernel(
     // Holds d_state results
     scalar_t *cur_s_grad = &cur_state[d_size];
     // Holds tile results (size = num_tiles)
-    scalar_t *shared_tile = &cur_s_grad[d_size];
+    Vec<2, scalar_t> *shared_tile = reinterpret_cast<Vec<2, scalar_t> *>(&cur_s_grad[d_size]);
 
     // NOTE: Shouldn't be possible to be out of bounds for (b and d)
 
@@ -364,17 +361,13 @@ __global__ void lfw_cuda_bwd_qk_kernel(
             d_k += deltaVal * cur_s_grad[d];
             d_k -= d_value[d_offset + d] * cur_state[d];
         }
-        shared_tile[tile_id * width] = d_q;
-        shared_tile[tile_id * width + 1] = d_k;
+        shared_tile[tile_id].vec[0] = d_q;
+        shared_tile[tile_id].vec[1] = d_k;
         __syncthreads();
-        d_q = 0;
-        d_k = 0;
-        for (int i = 0; i < num_tiles; i++)
-        {
-            d_q += shared_tile[i * width];
-            d_k += shared_tile[i * width + 1];
-        }
-        __syncthreads();
+        auto res = sumReduc<2>(shared_tile, tile_id, num_tiles);
+        d_q = res.vec[0];
+        d_k = res.vec[1];
+
         d_query[m_offset] = d_q;
         d_key[m_offset] = d_k;
 
@@ -518,8 +511,7 @@ std::vector<torch::Tensor> lfw_cuda_backward(
             .device(grad_state.device()));
 
     // TODO: Would be more efficient to pack rest of dimension into same SM
-    auto max_tiles = std::min((uint)(std::sqrt(M) * 2), MAX_X_TPB);
-    auto num_tiles = std::min(nextPowerOf2(M), max_tiles);
+    auto num_tiles = nextPowerOf2(std::min((uint)(std::sqrt(M)), MAX_X_TPB));
     // Elements to process per tile
     auto tile_size = ceil_div(M, num_tiles);
     // Cannot use same sm for different dims
@@ -530,7 +522,7 @@ std::vector<torch::Tensor> lfw_cuda_backward(
         grad_state.scalar_type(),
         "lfw_cuda_bwd_value_kernel",
         ([&]
-         { lfw_cuda_bwd_value_kernel<scalar_t><<<blocks, threads, (M + num_tiles) * sizeof(scalar_t)>>>(
+         { lfw_cuda_bwd_value_kernel<scalar_t><<<blocks, threads, M * sizeof(scalar_t) + num_tiles * sizeof(Vec<1, scalar_t>)>>>(
                grad_output.data<scalar_t>(),
                grad_state.data<scalar_t>(),
                query.data<scalar_t>(),
@@ -540,8 +532,7 @@ std::vector<torch::Tensor> lfw_cuda_backward(
                d_state.data<scalar_t>(),
                B, L, D, M, num_tiles, tile_size); }));
 
-    max_tiles = std::min((uint)(std::sqrt(D) * 2), MAX_X_TPB);
-    num_tiles = std::min(nextPowerOf2(D), max_tiles);
+    num_tiles = nextPowerOf2(std::min((uint)(std::sqrt(D)), MAX_X_TPB));
     // Elements to process per tile
     tile_size = ceil_div(D, num_tiles);
     // Cannot use same sm for different dims
@@ -552,7 +543,7 @@ std::vector<torch::Tensor> lfw_cuda_backward(
         grad_state.scalar_type(),
         "lfw_cuda_bwd_qk_kernel",
         ([&]
-         { lfw_cuda_bwd_qk_kernel<scalar_t><<<blocks_qk, threads_qk, (D * 2 + num_tiles * 2) * sizeof(scalar_t)>>>(
+         { lfw_cuda_bwd_qk_kernel<scalar_t><<<blocks_qk, threads_qk, (D * 2) * sizeof(scalar_t) + num_tiles * sizeof(Vec<2, scalar_t>)>>>(
                grad_output.data<scalar_t>(),
                grad_state.data<scalar_t>(),
                query.data<scalar_t>(),

@@ -80,8 +80,8 @@ def main():
 
     dtype = torch.half
     bsz = 32
-    dim = 64
-    kdim = 64
+    dim = 96
+    kdim = 96
 
     results = {}
     for provider in providers:
