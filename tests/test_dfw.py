@@ -23,6 +23,7 @@ def bld_gen():
             for seqlen in range(1, 512, 128):
                 yield bsz, seqlen, dim
     yield 2, 1024, 32
+    yield 2, 1024, 96
 
 
 class Test(unittest.TestCase):

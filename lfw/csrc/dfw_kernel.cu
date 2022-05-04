@@ -12,10 +12,42 @@ const unsigned int MAX_TPB = 1024;
 // Maximum thread for 1st dim of block
 const unsigned int MAX_X_TPB = MAX_TPB;
 
+#define WARP_SIZE 32
 #define ceil_div(a, b) (((a) + (b)-1) / (b))
+
+template <uint size, typename scalar_t>
+struct Vec
+{
+    scalar_t vec[size];
+
+    //     auto &operator+=(const Vec<size, scalar_t> *other)
+    //     {
+    // #pragma unroll
+    //         for (int i = 0; i < size; i++)
+    //         {
+    //             this.vec[i] += other.vec[i];
+    //         }
+    //         return *this;
+    //     }
+};
+
+/**
+ * @brief Performs reduction within one active warp.
+ */
+template <typename scalar_t>
+__device__ void warpReduce(volatile scalar_t *sdata, int tid)
+{
+    sdata[tid] += sdata[tid + 32];
+    sdata[tid] += sdata[tid + 16];
+    sdata[tid] += sdata[tid + 8];
+    sdata[tid] += sdata[tid + 4];
+    sdata[tid] += sdata[tid + 2];
+    sdata[tid] += sdata[tid + 1];
+}
 
 /**
  * @brief Performs parallel sum of an array, leaving the result in index 0.
+ * Only supports EVEN sizes for correctness.
  *
  * @tparam scalar_t
  * @param arr
@@ -23,29 +55,48 @@ const unsigned int MAX_X_TPB = MAX_TPB;
  * @param size
  * @return __device__
  */
-template <typename scalar_t>
-__device__ void parallel_sum(
-    scalar_t *arr,
-    const int id,
-    const int size,
-    const int width)
+template <uint width, typename VecType>
+__device__ VecType sumReduc(
+    VecType *arr,
+    const int tid,
+    const int size)
 {
-    int step_size = size / 2;
-    while (step_size > 0)
+    for (unsigned int step_size = size / 2; step_size > WARP_SIZE; step_size >>= 1)
     {
-        if (id < step_size)
+        if (tid < step_size)
         {
+
 #pragma unroll
-            for (int w = 0; w < width; w++)
+            for (int i = 0; i < width; i++)
             {
                 // Reduce to the left side
-                auto curPos = id * width + w;
-                arr[curPos] += arr[curPos + step_size * width];
+                arr[tid].vec[i] += arr[tid + step_size].vec[i];
             }
+            // arr[tid] += arr[tid + step_size];
         }
         __syncthreads();
-        step_size = step_size / 2;
     }
+    // auto res = arr[0];
+    // if (tid < 32)
+    //     warpReduce(arr, tid);
+
+    //     VecType res;
+    // #pragma unroll
+    //     for (int w = 0; w < width; w++)
+    //     {
+    //         res.vec[w] = 0;
+    //     }
+    auto res = arr[0];
+    for (int i = 1; i < min(WARP_SIZE, size); i++)
+    {
+#pragma unroll
+        for (int w = 0; w < width; w++)
+        {
+            res.vec[w] += arr[i].vec[w];
+        }
+    }
+    __syncthreads();
+    return res;
 }
 
 /**
@@ -75,15 +126,15 @@ __global__ void lfw_cuda_fwd_kernel(
     extern __shared__ char smem[];
     // Holds state (for this specific dimension d) (size = m_size)
     scalar_t *cur_state = reinterpret_cast<scalar_t *>(smem);
-    // Holds tile results (size = num_tiles)
-    scalar_t *shared_tile = &cur_state[m_size];
+    // Holding tile results
+    // scalar_t *shared_tile = &cur_state[m_size];
+    Vec<2, scalar_t> *shared_tile = reinterpret_cast<Vec<2, scalar_t> *>(&cur_state[m_size]);
 
     // NOTE: Shouldn't be possible to be out of bounds for (b and d)
 
     // We will be looping from m_start to m_end (which is the size of a tile)
     const int m_start = tile_id * tile_size;
     const int m_end = m_start + tile_size;
-    const int width = 2;
 
     // b, d, m, m = 0
     int state_offset = (b * d_size + d) * m_size;
@@ -112,18 +163,13 @@ __global__ void lfw_cuda_fwd_kernel(
             k_out += cur_state[m] * key[m_offset + m];
         }
         // Each tile produce its partial results
-        shared_tile[tile_id * width] = q_out;
-        shared_tile[tile_id * width + 1] = k_out;
+        shared_tile[tile_id].vec[0] = q_out;
+        shared_tile[tile_id].vec[1] = k_out;
         __syncthreads();
-        // Non-parallel reduction seems to be faster
-        q_out = 0;
-        k_out = 0;
-        for (int i = 0; i < num_tiles; i++)
-        {
-            q_out += shared_tile[i * width];
-            k_out += shared_tile[i * width + 1];
-        }
-        __syncthreads();
+        auto res = sumReduc<2>(shared_tile, tile_id, num_tiles);
+        q_out = res.vec[0];
+        k_out = res.vec[1];
+
         // Write output
         outputs[d_offset] = q_out;
 
@@ -398,15 +444,19 @@ std::vector<torch::Tensor> lfw_cuda_forward(
             .dtype(value.dtype())
             .device(value.device()));
 
-    // TODO: Would be more efficient to pack rest of dimension into same SM
-    const auto max_tiles = std::min((uint)(std::sqrt(M) * 2), MAX_X_TPB);
-    const auto num_tiles = std::min(nextPowerOf2(M), max_tiles);
-    // Elements to process per tile
+    // const auto max_tiles = std::min((uint)(std::sqrt(M) * 2), MAX_X_TPB);
+    const auto num_tiles = nextPowerOf2(std::min((uint)(std::sqrt(M)), MAX_X_TPB));
+    // const auto num_tiles = nextPowerOf2(std::min((uint)ceil_div(M, 2), MAX_X_TPB));
+    // Elements to process per tile. Must be powers of 2.
     const auto tile_size = ceil_div(M, num_tiles);
     // std::min(
     //     nextPowerOf2(D),
     //     std::min(MAX_TPB / num_tiles, MAX_D_TPB));
-
+    std::cout << "num_tiles: ";
+    std::cout << num_tiles;
+    std::cout << "\nTile size: ";
+    std::cout << tile_size;
+    std::cout << "\n";
     // Cannot use same sm for different dims
     const dim3 threads(num_tiles, 1, 1);
     const dim3 blocks(1, D, B);
@@ -415,7 +465,7 @@ std::vector<torch::Tensor> lfw_cuda_forward(
         value.scalar_type(),
         "lfw_cuda_fwd_kernel",
         ([&]
-         { lfw_cuda_fwd_kernel<scalar_t><<<blocks, threads, (M + num_tiles * 2) * sizeof(scalar_t)>>>(
+         { lfw_cuda_fwd_kernel<scalar_t><<<blocks, threads, M * sizeof(scalar_t) + (num_tiles) * sizeof(Vec<2, scalar_t>)>>>(
                query.data<scalar_t>(),
                key.data<scalar_t>(),
                value.data<scalar_t>(),

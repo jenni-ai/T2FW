@@ -42,7 +42,6 @@ class DFWFunction(torch.autograd.Function):
         ctx.save_for_backward(
             query,
             key,
-
             delta_value,
             final_state
         )
