@@ -442,14 +442,12 @@ std::vector<torch::Tensor> lfw_cuda_forward(
     // const auto num_tiles = nextPowerOf2(std::min((uint)ceil_div(M, 2), MAX_X_TPB));
     // Elements to process per tile. Must be powers of 2.
     const auto tile_size = ceil_div(M, num_tiles);
-    // std::min(
-    //     nextPowerOf2(D),
-    //     std::min(MAX_TPB / num_tiles, MAX_D_TPB));
-    std::cout << "num_tiles: ";
-    std::cout << num_tiles;
-    std::cout << "\nTile size: ";
-    std::cout << tile_size;
-    std::cout << "\n";
+
+    // std::cout << "num_tiles: ";
+    // std::cout << num_tiles;
+    // std::cout << "\nTile size: ";
+    // std::cout << tile_size;
+    // std::cout << "\n";
     // Cannot use same sm for different dims
     const dim3 threads(num_tiles, 1, 1);
     const dim3 blocks(1, D, B);
