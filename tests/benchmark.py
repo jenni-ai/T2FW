@@ -2,9 +2,9 @@
 import timeit
 
 import torch
-from lfw.functional import LFWFunction
-from lfw.functional_dfw import DFWFunction
-from lfw.torch import t2fw_torch
+from t2fw.functional_lfw import LFWFunction
+from t2fw.functional_dfw import DFWFunction
+from t2fw.torch import t2fw_torch
 from tabulate import tabulate
 
 

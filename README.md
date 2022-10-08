@@ -2,6 +2,7 @@
 
 
 ## Install
+Installing the package by cloning the repository, then run:
 ```
 python setup.py install
 ```
@@ -13,7 +14,7 @@ Recommended to use `torch.half` datatype.
 
 ```py3
 import torch
-from lfw.functional import LFWFunction
+from t2fw.functional_lfw import LFWFunction
 bsz = 1
 seqlen = 4
 dim = 4

@@ -14,7 +14,7 @@ def t2fw_torch(
         key: torch.Tensor,
         f_key: torch.Tensor,
         state: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-    """ Equivalent Torchscript implementation for reference """
+    """ Equivalent Torchscript implementation of decay rule for reference """
 
     outputs = torch.jit.annotate(List[torch.Tensor], [])
 
@@ -37,7 +37,7 @@ def t2dfw_torch(
         key: torch.Tensor,
         value: torch.Tensor,
         state: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-    """ Equivalent Torchscript implementation for reference """
+    """ Equivalent Torchscript implementation of delta rule for reference """
 
     outputs = torch.jit.annotate(List[torch.Tensor], [])
 

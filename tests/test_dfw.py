@@ -4,8 +4,8 @@ import unittest
 import numpy as np
 import torch
 import torch.nn.functional as F
-from lfw.torch import t2dfw_torch, t2dfw_torch_bw
-from lfw.functional_dfw import DFWFunction
+from t2fw.torch import t2dfw_torch, t2dfw_torch_bw
+from t2fw.functional_dfw import DFWFunction
 
 
 def uniform_gate_init(tensor):
