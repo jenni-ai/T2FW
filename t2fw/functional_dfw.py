@@ -22,6 +22,10 @@ load(
 
 
 class DFWFunction(torch.autograd.Function):
+    """
+    Implements the delta rule.
+    Assumes the scalar g_t is absorbed into the key vector.
+    """
     @staticmethod
     def forward(ctx,
                 query: torch.Tensor,
