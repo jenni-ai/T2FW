@@ -104,10 +104,18 @@ def main():
             if variant != 'attention' and test_inference:
                 seqlen = 1
 
-            value = torch.randn(bsz, seqlen, dim, dtype=dtype, device='cuda')
-            f = torch.rand_like(value)
-            q, k, f_key = (torch.randn(
-                bsz, seqlen, kdim, dtype=dtype, device='cuda') for _ in range(3))
+            if variant == 'attention' and test_inference:
+                value = torch.randn(bsz, seqlen, dim, dtype=dtype, device='cuda')
+                f = torch.rand_like(value)
+                k, f_key = (torch.randn(
+                    bsz, seqlen, kdim, dtype=dtype, device='cuda') for _ in range(2))
+                q = torch.randn(bsz, 1, kdim, dtype=dtype, device='cuda')
+            else:
+                value = torch.randn(bsz, seqlen, dim, dtype=dtype, device='cuda')
+                f = torch.rand_like(value)
+                q, k, f_key = (torch.randn(
+                    bsz, seqlen, kdim, dtype=dtype, device='cuda') for _ in range(3))
+
             s = torch.zeros(bsz, dim, kdim, dtype=dtype, device='cuda')
             grad = torch.randn_like(value)
 
@@ -166,8 +174,8 @@ def plot(variants, seqlens, results, peak_mem_results):
     plt.xlabel("Sequence Length (Tokens)")
 
     for variant in variants:
-        plot_time_data = np.log(np.array(results[variant]))
-        plot_mem_data = np.log(np.array(peak_mem_results[variant]))
+        plot_time_data = np.array(results[variant])
+        plot_mem_data = np.array(peak_mem_results[variant])
 
         color, linestyle = colors[variant]
 
@@ -178,7 +186,7 @@ def plot(variants, seqlens, results, peak_mem_results):
             color=color,
             linestyle=linestyle
         )
-        axs[0].set_ylabel("Execution Time, log(ms)")
+        axs[0].set_ylabel("Execution Time (ms)")
         axs[1].plot(
             seqlens,
             plot_mem_data,
@@ -186,7 +194,7 @@ def plot(variants, seqlens, results, peak_mem_results):
             color=color,
             linestyle=linestyle
         )
-        axs[1].set_ylabel("Peak GPU Memory, log(MB)")
+        axs[1].set_ylabel("Peak GPU Memory (MB)")
         axs[0].get_xaxis().set_visible(False)
 
 
@@ -199,7 +207,7 @@ def plot(variants, seqlens, results, peak_mem_results):
 
 variant_labels = {
     'attention': 'Attention',
-    **{f'LFWFunction': f'Linear (m = {i})' for i in [64]},
+    **{f'LFWFunction': f'Decay (m = {i})' for i in [64]},
     **{f'DFWFunction': f'Delta (m = {i})' for i in [64]},
 }
 colors = {
