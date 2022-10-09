@@ -1,7 +1,12 @@
 # Fine-Tuning Pre-trained Transformers into Decaying Fast Weights
+CUDA Kernels for the paper "Fine-Tuning Pre-trained Transformers into Decaying Fast Weights" in EMNLP 2022.
 
+## Abstract
+Autoregressive Transformers are strong language models but incur O(T) complexity during per-token generation due to the self-attention mechanism. Recent work proposes kernel-based methods to approximate causal self-attention by replacing it with recurrent formulations with various update rules and feature maps to achieve O(1) time and memory complexity. We explore these approaches and find that they are unnecessarily complex, and propose a simple alternative - decaying fast weights - that runs fast on GPU, outperforms prior methods, and retains 99\% of attention's performance for GPT-2.
+We also show competitive performance on WikiText-103 against more complex attention substitutes.
 
 ## Install
+Installing the package by cloning the repository, then run:
 ```
 python setup.py install
 ```
@@ -13,7 +18,7 @@ Recommended to use `torch.half` datatype.
 
 ```py3
 import torch
-from lfw.functional import LFWFunction
+from t2fw.functional_lfw import LFWFunction
 bsz = 1
 seqlen = 4
 dim = 4

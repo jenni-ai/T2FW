@@ -22,6 +22,12 @@ load(
 
 
 class LFWFunction(torch.autograd.Function):
+    """
+    Implementation of decay update rule.
+    This implementation focuses on the CUDA kernel portion, and does not
+    perform the non-linear sigmoid gating for f_key (it assumes the input is already gated).
+    Hence, this function is refered to as "linear fast weights".
+    """
     @staticmethod
     def forward(ctx,
                 value: torch.Tensor,

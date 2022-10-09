@@ -3,8 +3,9 @@ import unittest
 
 import numpy as np
 import torch
-from t2fw.functional_lfw import LFWFunction
-from t2fw.torch import t2fw_torch
+import torch.nn.functional as F
+from t2fw.torch import t2dfw_torch, t2dfw_torch_bw
+from t2fw.functional_dfw import DFWFunction
 
 
 def uniform_gate_init(tensor):
@@ -22,30 +23,36 @@ def bld_gen():
             for seqlen in range(1, 512, 128):
                 yield bsz, seqlen, dim
     yield 2, 1024, 32
+    yield 2, 1024, 96
 
 
 class Test(unittest.TestCase):
     def test_cpp(self):
         torch.manual_seed(1)
-        dtype = torch.half
+        # Pure additive may cause numerical issue under fp16
+        dtype = torch.float
 
         for bsz, seqlen, dim in bld_gen():
-            # bsz, seqlen, dim = (1, 256, 32)
-            kdim = math.ceil(dim / 2)
-            print('test_cpp', bsz, seqlen, dim, kdim)
+            mdim = math.ceil(dim / 2)
+            # bsz, seqlen, dim, mdim = (1, 4, 4, 4)
+            print('test_cpp', bsz, seqlen, dim, mdim)
 
-            x = torch.randn(bsz, seqlen, dim, dtype=dtype, device='cuda')
-            f = torch.sigmoid(uniform_gate_init(torch.empty_like(x)))
-            q, k, f_key = (torch.randn(
-                bsz, seqlen, kdim, dtype=dtype, device='cuda') for _ in range(3))
-            f_key = torch.sigmoid(uniform_gate_init(f_key))
-            s = torch.randn(bsz, dim, kdim, dtype=dtype, device='cuda')
+            value = torch.randn(bsz, seqlen, dim, dtype=dtype, device='cuda')
+            query, key = (
+                torch.randn(bsz, seqlen, mdim, dtype=dtype, device='cuda') for _ in range(2)
+            )
+            # Allow keys to be scaled
+            key = torch.softmax(key, dim=-1) * \
+                torch.sigmoid(key.mean(dim=-1, keepdim=True))
 
-            input_vars = (x, f, q, k, f_key, s)
-            for v in input_vars:
-                v.requires_grad_()
+            state = torch.randn(bsz, dim, mdim, dtype=dtype,
+                                device='cuda')
 
-            ref_output, ref_state = t2fw_torch(*input_vars)
+            input_vars = (query, key, value, state)
+            for var in input_vars:
+                var.requires_grad_()
+
+            ref_output, ref_state = t2dfw_torch(*input_vars)
             grad = torch.randn_like(ref_output)
             grad_state = torch.randn_like(ref_state)
             ref_output.backward(grad, retain_graph=True)
@@ -53,13 +60,18 @@ class Test(unittest.TestCase):
             ref_grads = tuple(v.grad for v in input_vars)
 
             # Clear grad
-            for v in input_vars:
-                v.grad = None
+            for var in input_vars:
+                var.grad = None
 
-            fast_output, fast_state = LFWFunction.apply(*input_vars)
+            fast_output, fast_state = DFWFunction.apply(*input_vars)
             fast_output.backward(grad, retain_graph=True)
             fast_state.backward(grad_state)
             fast_grads = tuple(v.grad for v in input_vars)
+            # with torch.no_grad():
+            #     fast_grads = tuple(t2dfw_torch_bw(
+            #         grad, grad_state,
+            #         query, key, value, state, fast_state
+            #     ))
 
             try:
                 assert torch.allclose(ref_output, fast_output, atol=1e-2, rtol=1e-1), (
